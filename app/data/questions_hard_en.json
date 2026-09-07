@@ -145,10 +145,10 @@
     "difficulty": "hard",
     "question": "Given the code:\n```\nterraform {\n  backend \"s3\" {\n    bucket         = \"my-tf-state\"\n    key            = \"app/terraform.tfstate\"\n    region         = \"eu-west-1\"\n    dynamodb_table = \"tf-locks\"\n  }\n}\n```\nDuring a terraform apply run, the CI runner process was killed abruptly (OOM kill) right in the middle of apply. On the next terraform plan run on a different runner, it fails with \"Error acquiring the state lock\". What should be done?",
     "options": [
-      "Delete the S3 bucket and create a new one — the old state is corrupted",
+      "It's enough to wait until the default DynamoDB lock TTL expires (15 minutes by default) — Terraform will automatically discard the stale lock entry on the next acquisition attempt without needing force-unlock.",
       "Confirm that the previous process is indeed not still running (rather than a temporary network issue), and then release the stuck lock with terraform force-unlock <LOCK_ID> (LOCK_ID is taken from the error text), rather than manually deleting the DynamoDB table or files",
-      "Downgrade the Terraform CLI to a previous version",
-      "Just keep retrying terraform apply in a loop until the lock releases itself"
+      "You need to manually delete the lock item directly from the DynamoDB table via AWS CLI (`aws dynamodb delete-item`), since `terraform force-unlock` only works for the local backend and doesn't support S3+DynamoDB in CI environments.",
+      "The correct fix is to temporarily disable `dynamodb_table` in the backend block, run `terraform init -reconfigure` to clear the lock that way, and then restore the locking setting before the next apply."
     ],
     "correct_index": 1,
     "explanation": "An abrupt process termination during apply can leave a lock record in DynamoDB hanging (not released cleanly). The correct approach is terraform force-unlock <LOCK_ID>, after first making sure no other process is concurrently working with this state (otherwise you risk a race condition and state corruption). Manually deleting the bucket/table is an excessive and risky operation."
@@ -159,10 +159,10 @@
     "difficulty": "hard",
     "question": "Given the code:\n```\nresource \"aws_lb_target_group\" \"tg\" {\n  name = \"app-tg-${substr(uuid(), 0, 8)}\"\n  ...\n}\n```\nOn every terraform plan (even with no real changes anywhere else), a diff appears like ~ name = \"app-tg-abc12345\" -> \"app-tg-f9e8d7c6\". Why does this constant diff occur, and how do you fix it?",
     "options": [
-      "This is normal behavior for uuid() — it's expected, the diff can be ignored",
+      "The diff only happens because `substr()` is applied to the result of `uuid()` — if you use `uuid()` without `substr()`, the value gets fixed in state on the first apply and isn't recomputed afterward.",
       "The uuid() function generates a new random value every time the plan is evaluated, so the resource name appears \"changed\" on every plan — to get a stable value computed once at creation time and stored in state, you need to use a random_id/random_string resource (whose value is fixed in state) instead of calling the uuid() function directly in the attribute",
-      "The problem is that the backend doesn't support saving random values",
-      "substr() is corrupting the result of uuid(), format() should be used instead of substr()"
+      "The problem is fixed by adding `lifecycle { ignore_changes = [name] }` to the `aws_lb_target_group` resource itself — Terraform will keep calling uuid() every time, but will stop treating it as a change requiring apply.",
+      "uuid() caches its value in `.terraform.lock.hcl` on the first `terraform init` — the diff means someone deleted or regenerated the lock file, causing Terraform to generate a new value on every plan."
     ],
     "correct_index": 1,
     "explanation": "uuid() (like timestamp()) is a non-deterministic function: it is recomputed on every terraform plan/apply, not just once when the resource is created. Using its result directly in a resource attribute causes a perpetual diff on every plan. The correct pattern is to move the randomness into a separate resource (random_id, random_string, etc.), whose value is computed once and fixed in state at creation time, and remains stable afterward."
@@ -173,10 +173,10 @@
     "difficulty": "hard",
     "question": "A pipeline has two sequential steps:\n```\nstep 1: terraform plan -out=tfplan\nstep 2: (3-hour wait for manual approval)\nstep 3: terraform apply tfplan\n```\nDuring the 3-hour wait, another engineer manually deleted one of the resources present in the saved tfplan. What happens at the apply tfplan step?",
     "options": [
-      "Terraform will silently recompute the plan before apply, taking the new state into account",
+      "Terraform always re-validates the saved plan before applying it and will automatically drop any operations on resources that no longer exist, applying the remaining part of the plan without errors.",
       "Terraform will attempt to apply the saved (stale) plan, and apply will fail with an error (e.g., that a resource the plan expected to update was not found) — a saved plan does not protect against changes to the real infrastructure that happen after it was computed",
-      "Apply will automatically recreate the resource with no errors, since that was part of the original plan",
-      "Terraform will block apply in advance, already at the tfplan-loading stage, if it detects a discrepancy"
+      "Apply will complete successfully but with no real effect on the deleted resource — Terraform will simply skip that operation in the plan and continue with the rest, with no warnings in the output.",
+      "The error occurs already at the tfplan-file-reading stage (before apply starts), since Terraform stores a state hash inside the plan file and will refuse to use it if the backend is unreachable for verification at apply time."
     ],
     "correct_index": 1,
     "explanation": "A saved plan file pins down the set of operations computed at the time of plan, but it does not block changes to the real infrastructure between plan and apply. If a resource that the plan intended to, say, update, was manually deleted in the meantime, apply will fail with an error (the provider will report the resource as not found) — a saved plan guarantees only what should be done, assuming the state hasn't changed since plan, not protection against concurrent infrastructure drift."
@@ -187,10 +187,10 @@
     "difficulty": "hard",
     "question": "Given the code:\n```\nvariable \"instance_type\" {\n  type    = string\n  default = \"t2.micro\"\n}\n```\nAt run time, all of the following are specified simultaneously: a terraform.tfvars file (instance_type = \"t2.small\"), an environment variable TF_VAR_instance_type=t2.medium, and a command-line flag -var=\"instance_type=t2.large\". Which value will actually be applied?",
     "options": [
-      "t2.micro (the default value always has the highest priority)",
+      "t2.micro (the default value applies whenever none of the more specific sources is syntactically recognized by Terraform as a valid override for that variable)",
       "t2.large — the command-line -var flag has the highest priority among the listed sources",
-      "t2.medium — TF_VAR_* environment variables have the highest priority",
-      "t2.small — values from .tfvars files have the highest priority"
+      "t2.medium — TF_VAR_* environment variables are processed by the Terraform CLI earlier than configuration files and override any values set later during initialization, including explicit CLI flags",
+      "t2.small — values from auto-discovered tfvars files are treated as part of the project's own configuration and therefore take priority over any sources external to the code, including command-line flags"
     ],
     "correct_index": 1,
     "explanation": "Terraform's variable precedence (lowest to highest): the default value in code -> TF_VAR_* environment variables -> the terraform.tfvars file (and terraform.tfvars.json) -> *.auto.tfvars files (alphabetically) -> -var / -var-file command-line flags (in the order given, with later ones winning). So an explicit CLI -var overrides all other sources, including the tfvars file and the environment variable."
@@ -201,10 +201,10 @@
     "difficulty": "hard",
     "question": "Given the module code:\n```\n# modules/vpc/main.tf\nresource \"aws_vpc\" \"this\" {\n  cidr_block = var.cidr_block\n}\n\nresource \"aws_subnet\" \"private\" {\n  for_each   = var.private_subnets\n  vpc_id     = aws_vpc.this.id\n  cidr_block = each.value\n}\n```\nIn the root module, the module.vpc.private_subnets for_each call changes to a different set of keys (e.g., keys \"a\", \"b\", \"c\" are replaced with \"az1\", \"az2\", \"az3\" with the same CIDR blocks). What happens on apply?",
     "options": [
-      "Terraform will realize the CIDR blocks haven't changed and simply rename the keys in state without recreating the subnets",
+      "Terraform will realize the CIDR blocks haven't changed and simply rename the existing keys in state without recreating the subnets, since for_each by default matches instances by attribute value rather than by key alone.",
       "All subnets from the old keys (\"a\", \"b\", \"c\") will be destroyed, and new subnets created with the new keys (\"az1\", \"az2\", \"az3\") — Terraform matches for_each instances by key, not by attribute value, so changing the set of keys is treated as destroying old instances and creating new ones, even if the actual configuration (CIDR) hasn't changed",
-      "Apply will fail with a validation error, since for_each keys cannot be changed after the first apply",
-      "The change will only apply to the missing keys, and the remaining subnets will automatically stay untouched"
+      "Apply will fail with a validation error, since for_each forbids changing the set of keys after the first apply without an explicit `terraform state mv` for each affected instance — Terraform blocks this operation preemptively.",
+      "The change will only apply to the missing keys (\"az1\",\"az2\",\"az3\"), while resources under the old keys (\"a\",\"b\",\"c\") will remain untouched in state — Terraform doesn't treat a key disappearing from for_each as a signal to destroy the corresponding resource."
     ],
     "correct_index": 1,
     "explanation": "for_each uniquely identifies each resource instance by its key. If the set of keys changes (even if conceptually these are the \"same\" subnets, just with different name-keys), Terraform has no way to automatically match the old instance to the new one — it sees the old keys disappearing (destroy) and new ones appearing (create). To simply rename the keys without recreating the actual resources, you need a moved block (Terraform 1.1+) explicitly mapping the old index/key to the new one."
@@ -215,10 +215,10 @@
     "difficulty": "hard",
     "question": "Given the code:\n```\ndata \"terraform_remote_state\" \"network\" {\n  backend = \"s3\"\n  config = {\n    bucket = \"tf-state-bucket\"\n    key    = \"network/terraform.tfstate\"\n    region = \"eu-west-1\"\n  }\n}\n\nresource \"aws_instance\" \"app\" {\n  subnet_id = data.terraform_remote_state.network.outputs.subnet_id\n}\n```\nWhat's a drawback of this way of passing data between states (compared to, say, explicit output/input variables between modules within a single root module)?",
     "options": [
-      "This isn't supported at all in current Terraform versions",
+      "This method isn't supported at all in current Terraform versions — the `terraform_remote_state` data source was removed in favor of dedicated data sources for specific backend providers.",
       "data.terraform_remote_state reads the entire state of another project (including potentially sensitive data in other outputs/attributes) and creates an implicit runtime dependency between fully independent configurations/teams — and Terraform doesn't build an explicit dependency graph between the projects themselves (only between resources within the current state), which makes it harder to track who depends on whom",
-      "This method only works with the local backend, not with s3",
-      "The terraform_remote_state data source cannot be used inside a resource block, only inside an output"
+      "The only drawback of this approach is performance: Terraform downloads the entire remote state on every plan/apply, which slows things down, but it creates no security risks or dependency-visibility issues between teams.",
+      "The terraform_remote_state data source can only be used inside a root module's output block — trying to reference its value inside a resource block (as in the subnet_id example) will cause a validation error at plan time."
     ],
     "correct_index": 1,
     "explanation": "terraform_remote_state reads another project's entire state, which means potential access to all of its outputs (and, in some cases, the risk of exposing sensitive data if something in the other state isn't marked sensitive) — plus it creates a hidden cross-project dependency that isn't visible as an explicit graph at the organization/CI level (unlike connections within a single root module via module outputs). Narrower data-sharing mechanisms (SSM Parameter Store, explicit APIs, limited outputs) are often preferred precisely because of these risks."
@@ -230,9 +230,9 @@
     "question": "Given the code with a provisioner:\n```\nresource \"aws_instance\" \"web\" {\n  ami = \"ami-12345\"\n  provisioner \"local-exec\" {\n    command = \"curl -X POST https://api.example.com/register?ip=${self.public_ip}\"\n  }\n  provisioner \"local-exec\" {\n    when    = destroy\n    command = \"curl -X POST https://api.example.com/deregister?ip=${self.public_ip}\"\n  }\n}\n```\nWhat happens to the destroy-time provisioner (when = destroy) if the resource is being destroyed via terraform apply -destroy or a regular terraform destroy, but self.public_ip is no longer available at that point (e.g., the instance was already manually stopped and lost its public IP)?",
     "options": [
       "Terraform will automatically substitute the last known public_ip value from state before destroying, regardless of the current actual state — the destroy-time provisioner uses attribute values fixed in state at the start of destroy, not values freshly queried from the provider",
-      "The destroy-time provisioner is always skipped if the resource was manually modified",
-      "Terraform will fail with a validation error before destroy even begins",
-      "self in a destroy-time provisioner always refers to the resource replacing the one being destroyed, not the resource being destroyed itself"
+      "Terraform runs the destroy-time provisioner before actually destroying the resource and will attempt to re-query the current public_ip from the AWS provider in real time — if the instance already lost its IP, the provisioner gets an empty value and simply skips running the command without an error.",
+      "A destroy-time provisioner is always automatically skipped if Terraform detects that the resource's state has drifted manually since the last successful apply — this is a safety mechanism to avoid running destructive commands against potentially stale data.",
+      "self in a destroy-time provisioner always refers to the resource replacing the one being destroyed (in a create_before_destroy context), not the resource being destroyed itself — so self.public_ip here would take the new instance's IP, not the old one's."
     ],
     "correct_index": 0,
     "explanation": "A destroy-time provisioner (when = destroy) runs before the resource is actually deleted, and uses attribute values from the current state (the last known state recorded by Terraform), rather than making a live call to the provider's API at the moment of deletion. So even if the real IP has already changed/disappeared for external reasons, the provisioner will receive exactly the value fixed in state."
@@ -243,10 +243,10 @@
     "difficulty": "hard",
     "question": "Given the code:\n```\nresource \"aws_iam_policy\" \"app\" {\n  name   = \"app-policy\"\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect   = \"Allow\"\n      Action   = [\"s3:GetObject\"]\n      Resource = \"${aws_s3_bucket.data.arn}/*\"\n    }]\n  })\n}\n```\nAfter renaming the S3 bucket (changing the bucket argument, which causes aws_s3_bucket.data to be recreated with a new ARN), the next apply also updates aws_iam_policy.app, in addition to the bucket itself. Why does this happen, if the policy itself wasn't changed in the code?",
     "options": [
-      "This is unrelated to the bucket — the IAM policy is automatically updated once a day on a schedule",
+      "This isn't directly related to the bucket — aws_iam_policy simply gets updated whenever ANY resource in the same .tf file changes, regardless of whether there's an actual expression reference between them.",
       "aws_iam_policy.app references aws_s3_bucket.data.arn inside jsonencode() — this creates an explicit data dependency (implicit dependency): when the bucket is recreated and gets a new ARN, the value inside the policy changes, so Terraform must update the policy resource too, so the JSON content matches the new ARN",
-      "aws_iam_policy is always recreated on every apply regardless of dependencies",
-      "jsonencode() only caches the value at plan time, so the arn is always \"new\" during apply"
+      "aws_iam_policy is always fully recreated on every apply whenever it uses jsonencode() — Terraform can't compute a partial diff inside a JSON string, so it treats the entire resource as changed on every run regardless of dependencies.",
+      "jsonencode() only recomputes its value once, on the first terraform init, and caches the result in .terraform.lock.hcl — the arn inside the resulting JSON string therefore always reflects its value at the time of the first init, not the bucket's current state."
     ],
     "correct_index": 1,
     "explanation": "A reference to aws_s3_bucket.data.arn inside an expression (even nested deep inside jsonencode) creates an implicit dependency between resources. Terraform builds its dependency graph based on such references in expressions — if recreating the bucket changes the value of arn, any resource using that value (here, the policy JSON) must be recomputed/updated to stay consistent with the new state of the dependency."
@@ -257,10 +257,10 @@
     "difficulty": "hard",
     "question": "Given the code (Terraform 1.7+):\n```\nremoved {\n  from = aws_instance.legacy\n\n  lifecycle {\n    destroy = false\n  }\n}\n```\nAfter applying this block and removing the corresponding resource block for aws_instance.legacy from the code, what happens to the actual EC2 instance on the next apply?",
     "options": [
-      "The instance will be immediately terminated in the cloud, as with a normal resource block removal",
+      "The instance will be immediately terminated in the cloud on the next apply — the removed block with destroy = false only affects the order of operations (destroy the resource first, then clean up state), but doesn't prevent the actual deletion of the physical resource.",
       "The instance will keep running unchanged in the cloud — Terraform will only remove the record for this resource from its state, stopping management of it; the actual EC2 instance continues to exist and must be deleted/administered outside of Terraform if needed",
-      "Terraform will move the instance to a stopped (but not deleted) state",
-      "A removed block without specifying to is equivalent to a terraform state mv into nowhere, which causes an error"
+      "Terraform will move the instance to a stopped (but not deleted) state, interpreting `destroy = false` as an explicit command to change the resource's runtime status in the cloud, rather than just an operation on state.",
+      "A removed block without specifying `to` is treated as equivalent to a manual `terraform state rm` run locally by each developer — meaning other team members won't automatically get this state change on their next apply."
     ],
     "correct_index": 1,
     "explanation": "removed { from = ..., lifecycle { destroy = false } } is a way to take a resource out from under Terraform's management (remove its record from state), explicitly specifying that the physical resource should not be touched/deleted. This differs from simply removing the resource block from the code, which would attempt a destroy on the next apply."
@@ -271,10 +271,10 @@
     "difficulty": "hard",
     "question": "An organization has run triggers configured in HCP Terraform: an apply in the \"network\" workspace automatically triggers a run in the \"app\" workspace. The \"app\" workspace also has a speculative plan configured on pull requests and separately a manual apply on the main branch. What happens if the run in the \"network\" workspace fails at the apply stage?",
     "options": [
-      "The run in the \"app\" workspace will still start on schedule, regardless of network's result",
+      "The run in the app workspace will still fire on an hourly schedule regardless of the apply result in network — run triggers in HCP Terraform work like a cron job rather than an event tied to the upstream workspace's completion status.",
       "The run trigger only fires on a SUCCESSFUL run (apply) completion in the source workspace (network) — if apply there fails, the run in the dependent workspace \"app\" will not be automatically triggered via the run trigger",
-      "The run trigger will fire, but immediately go to an \"errored\" state without running plan",
-      "Run triggers in HCP Terraform only react to plan events, not apply, so an apply failure doesn't matter"
+      "The run trigger will fire regardless of the network apply's outcome (success or failure), but will automatically move to a planned_and_finished state without a real apply, giving an engineer the chance to manually decide whether to continue the chain.",
+      "Run triggers in HCP Terraform only react to the creation of a new state version, not to the apply run's status — so a failure at the apply stage in network doesn't block the trigger firing for app, since a new state version is still created either way."
     ],
     "correct_index": 1,
     "explanation": "Run triggers in HCP Terraform launch a run in the dependent workspace specifically after a successful apply in the source workspace. If apply in the source workspace fails, the trigger chain does not proceed — this makes sense, since triggering a run in the dependent workspace based on incomplete/failed changes in the source would be pointless and potentially dangerous."
