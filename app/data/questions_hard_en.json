@@ -704,10 +704,10 @@
     "topic": "Terraform",
     "question": "Starting with Terraform 1.10 and AWS provider 5.x with support for S3-native locking, you can configure a backend without DynamoDB:\n```\nterraform {\n  backend \"s3\" {\n    bucket       = \"my-tf-state\"\n    key          = \"prod/terraform.tfstate\"\n    region       = \"eu-west-1\"\n    use_lockfile = true\n  }\n}\n```\nWhat does the use_lockfile = true attribute provide, and why does it eliminate the need for a separate DynamoDB table for locking?",
     "options": [
-      "use_lockfile enables locking via a separate .lock file on the local disk of the machine running terraform — it has nothing to do with the remote backend at all",
+      "use_lockfile enables locking via a separate .lock file on the local disk of the machine running terraform, in addition to any remote backend — both mechanisms (local and remote) work in parallel, providing double protection against state races.",
       "use_lockfile uses conditional writes (analogous to S3 object locking via ETag/If-None-Match) directly in the S3 bucket itself to implement a distributed lock, eliminating the need for a separate DynamoDB service, which was previously the only supported state-locking mechanism for the S3 backend",
-      "use_lockfile disables locking entirely, allowing concurrent applies with no blocking whatsoever",
-      "The use_lockfile attribute only relates to the provider lock file (.terraform.lock.hcl), not to state locking"
+      "use_lockfile disables locking entirely at the S3 object level, allowing concurrent applies with no blocking whatsoever, which speeds up CI/CD by avoiding sequential run execution.",
+      "The use_lockfile attribute only relates to the provider lock file (.terraform.lock.hcl) that pins plugin hashes, not to state locking — the naming similarity is purely coincidental, and it doesn't affect state locking at all."
     ],
     "correct_index": 1,
     "explanation": "Before S3-native locking existed, the only supported way to implement a distributed lock for the S3 backend was a separate DynamoDB table (the dynamodb_table setting in the backend configuration). use_lockfile = true uses S3's own conditional write operations (conditional PutObject support) to implement the same lock mechanism without an external dependency on DynamoDB, simplifying the backend infrastructure.",
@@ -718,10 +718,10 @@
     "topic": "Terraform",
     "question": "Given a backend configuration authenticated via OIDC (without static AWS access keys):\n```\nterraform {\n  backend \"s3\" {\n    bucket = \"my-tf-state\"\n    key    = \"prod/terraform.tfstate\"\n    region = \"eu-west-1\"\n\n    assume_role_with_web_identity {\n      role_arn                = \"arn:aws:iam::123456789012:role/terraform-ci\"\n      web_identity_token_file = \"/tmp/token\"\n    }\n  }\n}\n```\nWhat is the fundamental difference between assume_role_with_web_identity and classic assume_role (based on static IAM credentials)?",
     "options": [
-      "assume_role_with_web_identity is functionally identical to assume_role, just with a different syntax — there is no real difference",
+      "assume_role_with_web_identity is functionally identical to assume_role, just with a different configuration syntax — both blocks ultimately require the same long-lived static AWS access key/secret key, the only difference being the HCL format.",
       "assume_role_with_web_identity lets a CI system (e.g. the GitHub Actions/GitLab CI OIDC provider) exchange a SHORT-LIVED, cryptographically signed JWT token (which requires no pre-stored static AWS keys in CI secrets) for temporary AWS credentials via AWS STS — eliminating the need to store long-lived access key/secret key pairs in CI/CD variables at all",
-      "assume_role_with_web_identity only works for authentication within AWS itself (EC2/ECS), not for external CI systems",
-      "web_identity_token_file must contain a static access key in JSON format, not a JWT"
+      "assume_role_with_web_identity only works for authentication within AWS itself (EC2 instance profile/ECS task role), but doesn't suit external CI systems like GitHub Actions — those still require static access keys regardless.",
+      "web_identity_token_file must contain a static access key in JSON format, not a JWT token — the name 'web identity' in this case refers to the file format rather than to the federated-identity mechanism itself."
     ],
     "correct_index": 1,
     "explanation": "assume_role_with_web_identity implements OIDC federation: the CI system (e.g. GitHub Actions) presents a short-lived OIDC token, which AWS STS validates against the configured identity provider and, if the role's trust policy allows it, issues temporary credentials. This eliminates the need to store long-lived static AWS access keys/secrets in CI secrets, reducing the risk of their leakage — a fundamental difference from classic assume_role, which is typically invoked with already-existing static credentials of a base identity.",
@@ -732,10 +732,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\ndata \"terraform_remote_state\" \"network\" {\n  backend = \"s3\"\n\n  config = {\n    bucket = \"network-team-state\"\n    key    = \"prod/network/terraform.tfstate\"\n    region = \"eu-west-1\"\n    role_arn = \"arn:aws:iam::999999999999:role/cross-account-reader\"\n  }\n}\n```\nThis configuration reaches into state OWNED BY ANOTHER AWS account (999999999999) via role_arn. What key limitation of data \"terraform_remote_state\" is important to understand in the context of cross-team usage?",
     "options": [
-      "terraform_remote_state automatically filters out sensitive attributes (sensitive = true) from another project's state — only non-secret outputs will be accessible",
+      "terraform_remote_state automatically filters out sensitive attributes (sensitive = true) from another project's state — only non-secret outputs will be accessible, so cross-team access to secret data is technically impossible via this mechanism.",
       "terraform_remote_state reads the ENTIRE state as a whole (all outputs, with no exclusions) — if the calling module shouldn't have access to specific outputs, the only way to restrict access is to not grant read access to the state object at all via IAM/ACL on the backend itself; the terraform_remote_state mechanism itself does not support selective access to individual outputs at the Terraform level",
-      "The terraform_remote_state data source requires that the reading and owning projects use an identical version of the Terraform CLI",
-      "role_arn inside config is only supported for the \"remote\" backend type (HCP Terraform), not for \"s3\""
+      "The terraform_remote_state data source requires that the reading and owning projects use an identical version of the Terraform CLI — a version mismatch causes a state-format read error, regardless of the actual S3 access permissions.",
+      "role_arn inside config is only supported for the \"remote\" backend type (HCP Terraform), not for \"s3\" — attempting to specify role_arn in the example above would cause a configuration validation error already at terraform init time."
     ],
     "correct_index": 1,
     "explanation": "data.terraform_remote_state reads ALL outputs in their entirety from the given state — Terraform has no built-in mechanism for 'selective' visibility of specific outputs for specific consumers. If the owning team wants to expose only part of the data, the recommended approach is usually to publish the needed values through a separate, purpose-built mechanism (e.g. SSM Parameter Store/Secrets Manager with granular permissions), rather than sharing access to the whole terraform_remote_state directly.",
@@ -747,9 +747,9 @@
     "question": "Given a test snippet using the `terraform test` framework (Terraform 1.6+):\n```\n# tests/main.tftest.hcl\nmock_provider \"aws\" {\n  mock_resource \"aws_instance\" {\n    defaults = {\n      id = \"i-mockedid12345\"\n    }\n  }\n}\n\nrun \"creates_instance\" {\n  command = plan\n\n  assert {\n    condition     = aws_instance.web.instance_type == \"t3.micro\"\n    error_message = \"Wrong instance type\"\n  }\n}\n```\nWhat is mock_provider used for in this test, and how does it affect the need for real AWS credentials when running terraform test?",
     "options": [
       "mock_provider replaces a REAL provider call with a simulation (mock) that returns predefined default values for this provider's resources — allowing tests to run WITHOUT real cloud credentials and without creating real infrastructure, which is particularly useful for command = plan tests that check configuration logic rather than actual cloud behavior",
-      "mock_provider is only used for command = apply tests and is not supported for command = plan",
-      "mock_provider is a deprecated name for test_provider, kept for backward compatibility and not recommended for use",
-      "mock_provider still requires real AWS credentials, since it only logs real calls without altering their behavior"
+      "mock_provider is only used for command = apply tests and is not supported for command = plan — for tests that only check configuration logic without a real apply, the mocking mechanism is unavailable entirely.",
+      "mock_provider is a deprecated name for test_provider, kept for backward compatibility and not recommended for use — current Terraform 1.7+ documentation recommends using test_provider exclusively instead.",
+      "mock_provider still requires real AWS credentials, since it only logs real API calls without altering their behavior — 'mock' in the name refers to traffic recording for later replay, not to actually faking the calls."
     ],
     "correct_index": 0,
     "explanation": "mock_provider (Terraform 1.7+) lets terraform test tests run against a SIMULATED provider, without real calls to the cloud API and without requiring real credentials — mock_resource inside it sets default values for a specific resource type's attributes. This makes tests fast, cheap (they don't create real infrastructure), and suitable for CI without secrets, particularly for logic checks (conditional expressions, count/for_each, locals) via command = plan.",
@@ -760,10 +760,10 @@
     "topic": "Terraform",
     "question": "Given a test snippet:\n```\nrun \"invalid_environment\" {\n  command = plan\n\n  variables {\n    environment = \"invalid-value\"\n  }\n\n  expect_failures = [\n    var.environment,\n  ]\n}\n```\nWhat does the expect_failures attribute do in this run block, and what happens if the variable validation for environment does NOT fail with this value?",
     "options": [
-      "expect_failures makes Terraform IGNORE any validation errors, always treating the run as successful regardless of the outcome",
+      "expect_failures makes Terraform IGNORE any validation errors, always treating the run as successful regardless of the outcome — a way to temporarily 'silence' a known but not-yet-fixed problem in variable validation.",
       "expect_failures explicitly declares an EXPECTATION that evaluating the given expression (var.environment) WILL FAIL WITH AN ERROR (e.g. fail variable validation) — if the evaluation does NOT fail (validation unexpectedly passes), the TEST ITSELF is considered FAILED, since the expected error did not occur; this allows writing negative test cases that specifically verify the correctness of validation rules",
-      "expect_failures only applies to provider errors during apply, not to variable validation",
-      "expect_failures requires a separate mock_provider block, otherwise it is ignored"
+      "expect_failures only applies to provider errors during apply, not to variable validation — checking variable validation rules requires a separate, dedicated assert block with a condition referencing can() instead.",
+      "expect_failures requires a separate mock_provider block, otherwise it is ignored by the testing engine — without mock_provider, any value in expect_failures is considered unreachable and the test is automatically marked as skipped."
     ],
     "correct_index": 1,
     "explanation": "expect_failures = [reference_to_checked_object] is a mechanism for writing NEGATIVE tests: a run is considered successful if the given expression truly failed with an error (e.g. failed variable validation or a lifecycle precondition). If the expected error did NOT occur (validation unexpectedly 'let through' an invalid value), the test-run itself is considered failed, signaling a regression in the validation rules.",
@@ -774,10 +774,10 @@
     "topic": "Terraform",
     "question": "Given a test snippet:\n```\nrun \"setup\" {\n  command = apply\n  module {\n    source = \"./tests/setup\"\n  }\n}\n\nrun \"main_test\" {\n  command = plan\n\n  variables {\n    vpc_id = run.setup.vpc_id\n  }\n}\n```\nHow can run blocks in terraform test reference the results of OTHER run blocks (here: main_test uses run.setup.vpc_id)?",
     "options": [
-      "This is impossible — every run block is fully isolated and cannot use outputs from other run blocks",
+      "This is impossible — every run block is fully isolated and cannot use outputs from other run blocks; passing data between test steps requires writing intermediate values to an external file and reading it back via the local_file data source.",
       "run blocks execute in declaration order within the file, and the results (module outputs) of an earlier run are available to later ones via the syntax run.<run_name>.<output> — a common pattern: an initial run with command=apply creates helper infrastructure (e.g. via a dedicated test module { source = ... }), and subsequent runs use its outputs as input variables for the main test",
-      "References between run blocks only work in one direction — from the last run to the first, not the other way around",
-      "run.<name>.<output> only works if both run blocks use command = plan, but not apply"
+      "References between run blocks only work in one direction — from the last run to the first, not the other way around, so the setup run in the example technically couldn't provide vpc_id to main_test, which is declared after it.",
+      "run.<name>.<output> only works if both run blocks use command = plan, but not apply — since setup uses command = apply, main_test would be unable to access run.setup.vpc_id, and the configuration would be erroneous."
     ],
     "correct_index": 1,
     "explanation": "run blocks within a single .tftest.hcl file execute sequentially, and the syntax run.<run_name>.<output_name> lets you reference outputs obtained from an EARLIER run — this allows building multi-step test scenarios: for example, a separate setup run (often via its own helper test module { source = ... }) spins up needed prerequisite infrastructure, and a subsequent run uses its results as input variables to test the main module.",
@@ -788,10 +788,10 @@
     "topic": "Terraform",
     "question": "An organization on HCP Terraform has configured No-Code Provisioning for the 'standard-vpc' module, allowing business users to run it themselves without writing HCL code. Which of the following is an INCORRECT description of the No-Code Modules mechanism?",
     "options": [
-      "A No-Code module must be explicitly published to the organization's private registry and marked as available for No-Code Provisioning by an administrator",
-      "A user without Terraform skills can create a new workspace 'from' a No-Code module via the UI, providing variable values through a web form generated from the module's variable blocks, without needing to write the .tf module-call code themselves",
+      "A No-Code module must be explicitly published to the private registry and marked available for No-Code Provisioning — otherwise it won't appear in the catalog for business users.",
+      "A user without Terraform skills creates a workspace 'from' a No-Code module via the UI, setting variables in a web form, without writing the module-call .tf code.",
       "No-Code modules completely eliminate the need for a state file — resources created through them are not tracked by Terraform state at all",
-      "Changes (upgrades) to a No-Code module's version for an existing workspace can be proposed by an administrator and applied by the user through the same web form, without manually editing code"
+      "An admin can propose a No-Code module version upgrade, and the user applies it via the same web form, without manually editing code."
     ],
     "correct_index": 2,
     "explanation": "No-Code Provisioning is a UI/UX layer ON TOP OF the regular workspace/module/state mechanism of HCP Terraform: under the hood, a full-fledged workspace with regular Terraform state is still created — only the calling code (a module block with variables) is generated automatically based on values entered by the user in a web form. State is tracked exactly the same way as for any other workspace — the claim of its absence is incorrect.",
@@ -803,9 +803,9 @@
     "question": "An HCP Terraform organization has a Sentinel policy set configured with a policy that reads the plan via the tfplan/v2 import and checks that all aws_s3_bucket resources have server_side_encryption_configuration. This policy is applied with enforcement level \"advisory\", and a separate cost estimation policy is enabled with level \"hard-mandatory\". A plan violates BOTH policies at once. What happens to the run?",
     "options": [
       "The run will be blocked, because at least ONE of the applied policies — cost estimation — is hard-mandatory, regardless of the enforcement level of the other policies in the same policy set — each policy is evaluated according to its OWN enforcement level; the advisory policy (S3 encryption) failing only adds a warning, while the hard-mandatory policy (cost) failing unconditionally blocks apply",
-      "The run will proceed with no restrictions at all, because at least one of the policies is advisory, which 'softens' the check down to a warning for ALL policies in the set",
-      "The run will only be blocked if BOTH policies are hard-mandatory at the same time — with a mixed set of enforcement levels, apply is always allowed",
-      "Sentinel does not support applying multiple policies with DIFFERENT enforcement levels within the same policy set — this is a configuration error"
+      "The run will proceed with no restrictions at all, because at least one of the policies is advisory, which 'softens' the check down to a warning for ALL policies in the set, including the one configured as hard-mandatory, following a least-strict-common-denominator rule.",
+      "The run will only be blocked if BOTH policies are hard-mandatory at the same time — with a mixed set of enforcement levels (advisory + hard-mandatory together), apply is always allowed, since the system treats this as a configuration conflict resolved in favor of proceeding.",
+      "Sentinel does not support applying multiple policies with DIFFERENT enforcement levels within the same policy set — this is a configuration error that would be caught already when attaching the policy set to the workspace, before the run even starts."
     ],
     "correct_index": 0,
     "explanation": "Each Sentinel policy in a policy set is evaluated INDEPENDENTLY according to its OWN enforcement level (advisory / soft-mandatory / hard-mandatory) — they do not 'mix' or affect one another. Failing the advisory policy (S3 encryption) only adds a warning, without blocking the run, while failing the hard-mandatory policy (cost estimation) unconditionally blocks progression to apply, regardless of the outcome of other policies in the same set.",
@@ -816,10 +816,10 @@
     "topic": "Terraform",
     "question": "Given code with multiple import blocks using for_each over data from an external source:\n```\nlocals {\n  existing_buckets = toset([\"logs-bucket\", \"backup-bucket\", \"assets-bucket\"])\n}\n\nimport {\n  for_each = local.existing_buckets\n  to       = aws_s3_bucket.buckets[each.value]\n  id       = each.value\n}\n\nresource \"aws_s3_bucket\" \"buckets\" {\n  for_each = local.existing_buckets\n  bucket   = each.value\n}\n```\nWhat happens if the REAL bucket named \"assets-bucket\" doesn't actually exist in the AWS account at the time of terraform plan?",
     "options": [
-      "Terraform silently skips this particular import and creates \"assets-bucket\" as a regular new resource, proceeding without errors",
+      "Terraform silently skips this particular import and creates \"assets-bucket\" as a regular new resource, proceeding without errors — the absence of a real resource is interpreted as a signal to 'import nothing, create from scratch'.",
       "terraform plan fails with an error specifically for that import block iteration (each.value == \"assets-bucket\") — Terraform must find a real resource with the given id at the provider for EVERY iteration of an import with for_each, and the absence of even one of them causes plan to fail for the whole operation, without automatically preserving the successful imports of other for_each branches",
-      "The error only occurs at the apply stage, since import with for_each is validated lazily",
-      "import with for_each isn't supported at all in Terraform — this is a syntax error"
+      "The error only occurs at the apply stage, since import with for_each is validated lazily — at plan time Terraform only builds the list of planned imports without actually checking whether each resource exists at the provider.",
+      "import with for_each isn't supported at all in Terraform — this is a syntax error that would be caught already at terraform validate time, regardless of whether the real buckets exist in the cloud."
     ],
     "correct_index": 1,
     "explanation": "Each iteration of an import block with for_each essentially represents a separate import operation for a specific id at the provider. If the provider reports that no resource with that id exists, Terraform fails plan specifically for that iteration — when importing multiple resources at once, it's important to first confirm that ALL ids from the source (local.existing_buckets) correspond to genuinely existing resources, otherwise the whole plan will be aborted with an error.",
@@ -830,10 +830,10 @@
     "topic": "Terraform",
     "question": "Given code with several moved blocks describing a CHAIN of renames of the same resource across multiple releases:\n```\nmoved {\n  from = aws_instance.server\n  to   = aws_instance.web_server\n}\n\nmoved {\n  from = aws_instance.web_server\n  to   = module.compute.aws_instance.web_server\n}\n```\nIf a user applies the UPDATED code straight from a state where the resource in state is still named at the original aws_instance.server (i.e. they 'skipped' an intermediate release with aws_instance.web_server), how does Terraform handle this situation?",
     "options": [
-      "Terraform will only process the FIRST moved block in file order and fail on the second, since aws_instance.web_server doesn't exist yet in state",
+      "Terraform will only process the FIRST moved block in file order and fail on the second, since aws_instance.web_server doesn't exist yet in state — chains of multiple moved blocks require each intermediate address to actually be passed through in a separate apply.",
       "Terraform can TRACE a chain of multiple moved blocks transitively: if the resource in state is at the earliest from address in the chain, Terraform will apply all the linked moved blocks in sequence and correctly 'advance' the resource to its final, current address (module.compute.aws_instance.web_server) in a single run — without needing to apply the intermediate releases one at a time",
-      "The user MUST manually run two separate terraform apply operations — one per moved block — otherwise the chain won't work",
-      "Chains of moved blocks longer than one aren't supported — you'd need to manually delete the intermediate moved and keep only the last"
+      "The user MUST manually run two separate terraform apply operations — one per moved block — otherwise the chain won't work, since Terraform only applies one moved block per plan/apply run, regardless of how they're linked.",
+      "Chains of moved blocks longer than one aren't supported — you'd need to manually delete the intermediate moved and keep only the last one, pointing its from directly at the original aws_instance.server, skipping the intermediate name."
     ],
     "correct_index": 1,
     "explanation": "Terraform correctly handles CHAINS of moved blocks: if the resource in state is at the earliest address of the chain (aws_instance.server), Terraform will transitively apply all linked moved blocks in a single plan/apply run and correctly associate the resource with its final, current address. This lets users who skipped several intermediate releases safely 'catch up' to the current code structure with a single update, without going through each intermediate step manually.",
