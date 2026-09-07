@@ -284,10 +284,10 @@
     "topic": "Terraform",
     "question": "In an organization on HCP Terraform, a Sentinel policy is attached with enforcement level \"soft-mandatory\" for all workspaces, checking that all S3 buckets have encryption enabled. An engineer runs apply, and the plan violates this policy. What happens?",
     "options": [
-      "Apply is immediately and unconditionally blocked with no way to proceed — soft-mandatory behaves like hard-mandatory",
+      "Apply is blocked by the Sentinel policy permanently for this workspace — soft-mandatory differs from advisory precisely in that after the first violation, override becomes impossible for any user, including organization admins, until the policy itself is manually disabled.",
       "The policy check fails, but a user with sufficient permissions (policy override permission) can explicitly override the result and proceed — that's the whole point of 'soft', unlike 'hard-mandatory', which no one can override",
-      "The policy check completely ignores the violation and just logs a warning, apply proceeds as usual",
-      "soft-mandatory only applies to plan and is not checked during apply"
+      "The policy check records the violation as failed and creates an audit log entry, but the failure is automatically converted to a pass after a 15-minute waiting period if no user with override rights responds to the notification — this special soft-mandatory behavior is called auto-approve timeout.",
+      "soft-mandatory is checked at plan time and again at apply time, but a violation only blocks future re-runs of plan — the current apply, whose plan has already been checked, proceeds regardless of the re-check result."
     ],
     "correct_index": 1,
     "explanation": "Sentinel supports three levels: advisory (violation is only logged, apply is not blocked), soft-mandatory (apply is blocked, but a user with override rights can knowingly proceed, which is recorded in the audit log), and hard-mandatory (the block is unconditional, override is impossible for anyone, including the organization owner).",
@@ -298,10 +298,10 @@
     "topic": "Terraform",
     "question": "Given the code (Terraform 1.5+):\n```\nimport {\n  to = aws_instance.web\n  id = \"i-0123456789abcdef0\"\n}\n\nresource \"aws_instance\" \"web\" {\n  ami           = \"ami-12345\"\n  instance_type = \"t2.micro\"\n}\n```\nWhat is the key difference between this declarative import block and the terraform import aws_instance.web i-0123456789abcdef0 command?",
     "options": [
-      "No difference — the import block is just new syntax for the same manual interactive command",
+      "There's no real difference — the import block is just alternative syntax for the same command, which Terraform internally translates into a terraform import call before starting plan, so both approaches equally require interactive confirmation and can't be used in a non-interactive CI/CD environment.",
       "The import block can be saved in a .tf file and runs as part of terraform plan/apply (including in an automated CI/CD pipeline without interactive input), whereas terraform import is a one-off interactive CLI command that isn't saved in the code and isn't reproduced by a regular apply",
-      "The import block only works with a local backend, terraform import only with remote",
-      "The import block automatically generates a resource block in the configuration, terraform import does not"
+      "The import block only works with resources whose backend is configured as remote (S3, HCP Terraform), while terraform import supports only a local backend — trying to use an import block with local state would cause a validation error at terraform init time.",
+      "The import block automatically generates a full resource block configuration based on the actual attributes of the imported resource and writes it to a separate file, whereas terraform import requires the resource block to already exist in code beforehand and generates nothing itself."
     ],
     "correct_index": 1,
     "explanation": "The import block (since Terraform 1.5) declaratively describes an import right in the configuration — Terraform picks it up at plan/apply time, which makes the import reproducible and CI/CD-friendly (unlike the one-off terraform import command, which must be run manually each time locally). As before, a resource block with the corresponding attributes still needs to be written by hand (or via terraform plan -generate-config-out).",
@@ -312,10 +312,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\nresource \"aws_instance\" \"web\" {\n  ami           = \"ami-12345\"\n  instance_type = \"t2.micro\"\n\n  lifecycle {\n    postcondition {\n      condition     = self.public_ip != \"\"\n      error_message = \"The instance must receive a public IP.\"\n    }\n  }\n}\n```\nAt which stage is the postcondition check performed, and what happens if it fails?",
     "options": [
-      "The check runs at plan time, before the resource is created — apply simply won't start",
+      "The check runs at plan time, before the resource is actually created — if the condition is false, Terraform refuses to apply the plan ahead of time, and apply never starts running at all, exactly the way precondition does.",
       "The check runs AFTER the resource has actually been created/updated (unlike precondition, which is checked BEFORE) — if the condition is false, apply fails with an error even though the resource has already been created in the cloud, which helps catch the situation 'resource created, but not in the expected state'",
-      "postcondition is only checked during terraform destroy",
-      "The postcondition condition only affects the plan output but cannot fail apply"
+      "postcondition is only checked when running terraform destroy, to confirm the resource being removed actually existed in the expected state — during a normal create/update apply, this condition is completely ignored by the Terraform engine.",
+      "The postcondition condition only affects the plan output text (adds a warning) but cannot physically fail apply — the only way to stop apply when the condition is violated is a separate precondition block, manually duplicated."
     ],
     "correct_index": 1,
     "explanation": "precondition is checked before an operation on a resource (can prevent a pointless apply attempt), while postcondition is checked after it, based on the actual self attributes (e.g. self.public_ip). If the postcondition is false, apply fails with an error even though the resource itself was successfully created by the cloud provider — this signals a mismatch between the result and expectations, not a failure of the creation itself.",
@@ -326,10 +326,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\nresource \"aws_launch_template\" \"app\" {\n  name_prefix = \"app-\"\n  image_id    = var.ami_id\n}\n\nresource \"aws_autoscaling_group\" \"app\" {\n  launch_template {\n    id      = aws_launch_template.app.id\n    version = \"$Latest\"\n  }\n\n  lifecycle {\n    replace_triggered_by = [aws_launch_template.app.latest_version]\n  }\n}\n```\nWhat is replace_triggered_by used for here?",
     "options": [
-      "To automatically recreate the launch_template when the ASG changes",
+      "To automatically recreate aws_launch_template.app whenever the ASG's own configuration changes — replace_triggered_by works in both directions and syncs launch template recreation with autoscaling group changes, not the other way around.",
       "To explicitly force Terraform to REPLACE (destroy+create) the aws_autoscaling_group resource when latest_version of the launch_template changes — even if the launch_template.version = \"$Latest\" attribute itself hasn't formally changed in state, which without this directive wouldn't trigger the ASG's replacement",
-      "To prevent the ASG from being replaced on any launch_template changes",
-      "replace_triggered_by only works with data sources, not resources"
+      "To explicitly prevent the ASG from being replaced on any launch_template changes, by pinning the latest_version attribute as ignored — this is functionally equivalent to lifecycle.ignore_changes applied to a computed version value.",
+      "replace_triggered_by only works with values from data sources (data.*), not with attributes of regular managed resources — the reference to aws_launch_template.app.latest_version in the example wouldn't actually be evaluated by Terraform and would cause a plan-time error."
     ],
     "correct_index": 1,
     "explanation": "replace_triggered_by in a lifecycle block forcibly marks a resource for replacement when a specified value changes (an attribute of another resource or the resource itself), even if that value isn't used directly in the current resource's configuration — a typical case: an ASG referencing $Latest doesn't 'see' a launch template version change as a diff, so an explicit trigger is needed to make the ASG actually pick up the new version via replacement.",
@@ -340,10 +340,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\nvariable \"server\" {\n  type = object({\n    name = string\n    tags = optional(map(string), {})\n    size = optional(string, \"small\")\n  })\n}\n```\nWhat happens if the calling code passes var.server = { name = \"web\" } (without tags and size)?",
     "options": [
-      "Terraform fails validation — all object fields must be specified, even those marked optional",
+      "Terraform fails validation at plan time — optional() only documents intent but doesn't remove the requirement; in practice all fields of object() must be explicitly provided by the calling code, or the configuration fails type checking.",
       "tags will get the default value {}, and size will get \"small\", as specified by the second argument to optional() — Terraform fills in missing fields with their default values, not null",
-      "tags and size will get the value null, since optional() only allows omitting a field but doesn't set a default",
-      "optional() with a default value only works for primitive types (string, number, bool), not for map"
+      "tags and size will get the value null — optional() only allows omitting the field at call time but doesn't set a real default; the second argument to optional() is used purely for documentation in the variable's schema.",
+      "optional() with a default value only works for primitive types like string, number, and bool — passing a map or object as a default causes a variable schema validation error already at terraform init time."
     ],
     "correct_index": 1,
     "explanation": "optional(<type>, <default>) in an object() definition allows a specific field to be omitted when calling — if a default is passed as the second argument, the missing field will get exactly that value (not null); if no default is specified, the missing field becomes null.",
@@ -354,10 +354,10 @@
     "topic": "Terraform",
     "question": "Given the code in the root module:\n```\nmodule \"database\" {\n  source     = \"./modules/rds\"\n  depends_on = [module.network]\n}\n```\nWhy might you need depends_on at the whole-module level (module.network), rather than on a specific resource inside modules/rds?",
     "options": [
-      "depends_on between modules is not supported by Terraform, such code would cause a validation error",
+      "depends_on between modules isn't supported by Terraform starting with version 0.13 — this syntax was officially removed in favor of automatic dependency inference via output/input, and such code would cause a validation error already at terraform validate time, before any plan.",
       "To guarantee that ALL resources inside module.network are fully applied before beginning to apply ANY resources inside module.database — useful when the dependency is real (e.g. DB resources must be created in an already-existing VPC), but isn't expressed directly by passing one module's output into another's input (implicit dependency), so Terraform can't determine the order automatically",
-      "It's the only way to pass one module's outputs into another",
-      "depends_on at the module level only affects the order shown in plan output, not the actual apply order"
+      "It's the only way to pass one module's outputs into another without explicitly declaring a variable in the nested module — depends_on implicitly links all outputs of the calling module to the inputs of the called one, bypassing the standard module.network.output_name mechanism.",
+      "depends_on at the module level only affects the order resources are shown in terraform plan's text output, but doesn't change the actual order of operations during apply — the real resource creation sequence is still determined solely by the implicit dependency graph."
     ],
     "correct_index": 1,
     "explanation": "depends_on can be specified not only on individual resources, but also on an entire module call — this forces Terraform to finish applying (create/update) all resources of the dependent module before starting anything inside the current one. It's used when explicit output↔input passing between modules is unavailable or insufficient to express the needed ordering.",
@@ -368,10 +368,10 @@
     "topic": "Terraform",
     "question": "The state file for a project has grown to several thousand resources in a single workspace, causing terraform plan to take 10+ minutes even with no real changes. Which of the following approaches is the recommended way to solve exactly this performance problem (rather than just a temporary workaround)?",
     "options": [
-      "Always run plan with the -refresh=false flag to permanently disable syncing with real infrastructure",
+      "Always run plan with the -refresh=false flag to permanently disable syncing with real infrastructure — this is the officially recommended HashiCorp approach for performance problems on large states, despite the risk of stale data.",
       "Split the monolithic configuration into several separate states/workspaces along logical boundaries (e.g. by infrastructure layers: network, data, compute — or by services), using data sources/remote_state to link between them — this reduces the number of resources Terraform must process per plan",
-      "Delete all resources older than 30 days from state using terraform state rm",
-      "Increase -parallelism to the maximum possible value — this will guaranteed solve the plan performance problem regardless of the cause"
+      "Delete all resources older than 30 days from state using terraform state rm — stale resources don't affect the current infrastructure but still get counted when building the plan, so periodically cleaning them up directly fixes the slow plan calculation problem.",
+      "Increase -parallelism to the maximum possible value — increasing the number of parallel operations speeds up not just the actual application of changes against the provider, but also the plan-building/refresh process itself, so this is guaranteed to fix the problem regardless of the underlying cause."
     ],
     "correct_index": 1,
     "explanation": "-refresh=false speeds up plan, but at the cost of the risk of working with stale data about the real state — this is a workaround, not a root-cause fix. The real solution for scaling is decomposing one huge state into several smaller ones (along responsibility/lifecycle boundaries), which reduces the volume of data processed on every plan/refresh and lowers the blast radius of mistakes. -parallelism only speeds up the actual apply operations against the provider, not building the plan and refreshing state.",
@@ -382,10 +382,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\nvariable \"db_password\" {\n  type      = string\n  sensitive = true\n}\n\nresource \"aws_db_instance\" \"main\" {\n  password = var.db_password\n  # a typo in another argument causes a validation error at plan time\n  engine   = \"postgre\"  \n}\n```\nThe AWS provider returns a validation error message that includes the entire resource configuration object that was passed, including the password in plain text. What happens to this error message in the Terraform CLI output?",
     "options": [
-      "Terraform always fully redacts (censors) absolutely any text in which a sensitive variable's value is found, regardless of the text's source",
+      "Terraform always fully redacts (censors) absolutely any text in which a sensitive variable's value is found, regardless of the text's source — the engine scans all output, including messages from third-party providers and external APIs, and replaces matches with (sensitive value) before printing to the console.",
       "Terraform redacts (replaces with (sensitive value)) sensitive variable values ONLY in its own output (plan/apply diff, state, output) — if a specific value leaks into error text generated by the provider/API itself (rather than directly generated by Terraform), it may NOT be redacted, so marking a variable sensitive doesn't provide a 100% guarantee that the value will never end up in a log",
-      "This situation is technically impossible, AWS providers never include argument values in error messages",
-      "sensitive = true automatically encrypts the value before sending it to the provider's API"
+      "This situation is technically impossible — the AWS provider is obligated under the Terraform Plugin Protocol contract to filter out any values marked sensitive in the resource schema from its own error messages before passing them back to Terraform Core.",
+      "sensitive = true automatically encrypts the value before sending it to the provider's API using a key from the backend configuration — so even if the provider includes it in error text, what appears there is the encrypted value, not the plaintext password."
     ],
     "correct_index": 1,
     "explanation": "Marking sensitive = true makes Terraform itself hide the value in places it controls (the diff in plan/apply, state when shown via show, output values). But if the provider (an external API) itself includes the passed value in error text (e.g. during server-side validation), Terraform can't redact text generated by third-party code — a known limitation to keep in mind when working with secrets.",
@@ -396,10 +396,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\ndata \"terraform_remote_state\" \"network\" {\n  backend = \"s3\"\n  config = {\n    bucket   = \"prod-network-state\"\n    key      = \"network/terraform.tfstate\"\n    region   = \"eu-west-1\"\n    role_arn = \"arn:aws:iam::111111111111:role/tf-state-reader\"\n  }\n}\n```\nWhy is role_arn specified here in the backend configuration for reading remote state?",
     "options": [
-      "role_arn is mandatory for ANY use of terraform_remote_state, regardless of account",
+      "role_arn is mandatory for ANY use of terraform_remote_state with an S3 backend, regardless of whether the state lives in the same account or a different one — without role_arn, the data source can't even establish a session with the S3 API within the very same account.",
       "role_arn is needed here because the network state is stored in a DIFFERENT AWS account (111111111111) than the one the current apply runs from — assume role lets you temporarily obtain permissions to read the S3 bucket in someone else's account, which is typical for cross-account architectures (e.g. a separate account dedicated to shared network infrastructure)",
-      "role_arn is used to encrypt the state, not to access it",
-      "Without role_arn, terraform_remote_state can't read an S3 backend at all, regardless of account"
+      "role_arn is used here to encrypt the state's contents on the S3 side (SSE via a KMS role), not to control access to the bucket itself — read access is instead governed by the regular IAM policy attached to the current user or runner role.",
+      "Without role_arn, terraform_remote_state can't read an S3 backend at all, regardless of account — starting with AWS provider v4.x, accessing remote state in S3 is fundamentally impossible without an explicit assume role, even when the runner and the bucket are in the same account."
     ],
     "correct_index": 1,
     "explanation": "role_arn in the backend/terraform_remote_state data source configuration triggers an AssumeRole to obtain temporary credentials in another AWS account — a standard pattern for cross-account access to shared infrastructure (e.g. reading network state from a separate 'shared services' account in a multi-account AWS Organization).",
@@ -410,10 +410,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\nresource \"aws_instance\" \"web\" {\n  for_each = var.servers\n\n  dynamic \"ebs_block_device\" {\n    for_each = each.value.extra_disks\n    content {\n      device_name = ebs_block_device.value.device\n      volume_size = ebs_block_device.value.size\n    }\n  }\n}\n```\nWhy does the inner dynamic block use ebs_block_device.value instead of each.value?",
     "options": [
-      "each.value and ebs_block_device.value are complete synonyms in this context, there is no difference",
+      "each.value and ebs_block_device.value are complete synonyms in this context: Terraform automatically links the dynamic block's iterator name to the outer each, so both expressions always point to the same current element regardless of for_each nesting level.",
       "each.value/each.key refer to the outer for_each iterator of the resource itself (over var.servers); inside a dynamic block there's its own iterator whose default name equals the block's name (ebs_block_device), and ebs_block_device.value/.key refer to the current element of the INNER for_each (each.value.extra_disks) — using each.value inside content{} would refer to the outer iterator, not the current disk",
-      "ebs_block_device.value only works in top-level resource blocks, not inside dynamic",
-      "This is an error — a dynamic block cannot be nested inside a resource that has for_each"
+      "ebs_block_device.value only works inside top-level resource blocks that have their own for_each — when nesting a dynamic block inside a resource that itself uses for_each (as here), Terraform requires using only each.value, and referencing ebs_block_device.value inside content{} would cause a plan-time error.",
+      "This code would cause a validation error — a dynamic block can't be used inside a resource whose top-level for_each already occupies the each iterator name, creating a scope conflict between the outer and inner iterators."
     ],
     "correct_index": 1,
     "explanation": "Every for_each — whether on the resource itself or inside a dynamic block — has its own named iterator. By default, a dynamic block's iterator name matches the block's own name (here, ebs_block_device), unless overridden with iterator = <name>. Using each.value inside content{} would refer to the outer for_each iterator (var.servers), not the current disk from each.value.extra_disks — hence ebs_block_device.value is needed.",
