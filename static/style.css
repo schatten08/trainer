@@ -1,0 +1,746 @@
+:root {
+  --bg: #0f1117;
+  --card-bg: #1a1d29;
+  --border: #2a2e3f;
+  --text: #e6e8f0;
+  --text-muted: #9aa0b4;
+  --primary: #5b6cff;
+  --primary-hover: #4756d6;
+  --correct: #2ecc71;
+  --wrong: #ff5f5f;
+  --skipped: #f5a623;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px 60px;
+}
+
+.app-header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.app-header h1 {
+  margin: 0 0 4px;
+  font-size: 28px;
+}
+
+.subtitle {
+  color: var(--text-muted);
+  margin: 0;
+  font-size: 14px;
+}
+
+.screen {
+  display: none;
+}
+
+.screen.active {
+  display: block;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+
+.card h2 {
+  margin-top: 0;
+}
+
+.field {
+  margin-bottom: 20px;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+select#topic-select {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 15px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.toggle-row:hover {
+  border-color: var(--primary);
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.toggle-row.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.toggle-row.disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  width: 100%;
+  padding: 14px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+.btn-primary.hidden {
+  display: none;
+}
+
+.secondary-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.btn-secondary {
+  flex: 1;
+  min-width: 140px;
+  padding: 11px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.history {
+  margin-top: 28px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.history h3 {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+
+#history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+}
+
+#history-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+#history-list li:last-child {
+  border-bottom: none;
+}
+
+/* Quiz screen */
+.quiz-progress {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.badge {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+.progress-bar {
+  height: 6px;
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  width: 0%;
+  transition: width 0.3s;
+}
+
+.quiz-nav {
+  display: flex;
+  gap: 10px;
+}
+
+.quiz-nav .btn-secondary {
+  flex: 0 0 120px;
+}
+
+.quiz-nav .btn-primary {
+  flex: 1;
+}
+
+.quiz-nav .btn-secondary:disabled {
+  opacity: 0.35;
+}
+
+/* Result screen */
+.result-score {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+#result-score-value {
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.retry-info {
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin: 0 0 20px;
+}
+
+.retry-info.hidden {
+  display: none;
+}
+
+.actions {
+  margin-top: 20px;
+}
+
+.flash-recall-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--card-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+/* Мок-интервью */
+#mock-answer-input {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.mock-loading-card {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+}
+
+.mock-result-items {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.mock-result-row {
+  padding: 14px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.mock-result-question {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.mock-result-score {
+  font-size: 13px;
+  color: var(--primary);
+  margin-bottom: 6px;
+}
+
+.mock-result-feedback {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.mock-result-reference {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.mock-result-reference-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 4px;
+}
+
+.mock-result-reference-text {
+  font-size: 13px;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+#row-mock-senior {
+  margin-top: 12px;
+}
+
+/* Terraform Quiz (MCQ) */
+.btn-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.count-btn {
+  flex: 1;
+  min-width: 60px;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.count-btn:hover {
+  border-color: var(--primary);
+}
+
+.count-btn.selected {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+#question-text,
+#tf-quiz-question-text,
+#exam-question-text {
+  font-size: 19px;
+  margin-bottom: 20px;
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+
+/* Вопросы с код-сниппетами (HCL/plan output) оформляются как <pre><code>
+   внутри вопроса — моноширинный шрифт + горизонтальный скролл вместо
+   переноса длинных строк, чтобы не ломать отступы/структуру блока. */
+#question-text pre,
+#tf-quiz-question-text pre,
+#exam-question-text pre {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin: 10px 0 0;
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.45;
+}
+
+.option code,
+.options-list code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.95em;
+}
+
+
+.options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.option {
+  padding: 14px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 15px;
+  white-space: pre-wrap;
+  transition: all 0.15s;
+}
+
+.option:hover:not(.disabled) {
+  border-color: var(--primary);
+}
+
+.option.disabled {
+  cursor: default;
+}
+
+.option.correct {
+  background: rgba(46, 204, 113, 0.15);
+  border-color: var(--correct);
+}
+
+.option.wrong {
+  background: rgba(255, 95, 95, 0.15);
+  border-color: var(--wrong);
+}
+
+.btn-skip {
+  width: 100%;
+  margin-top: 12px;
+  padding: 11px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-skip:hover {
+  border-color: var(--skipped);
+  color: var(--skipped);
+}
+
+.btn-skip.hidden {
+  display: none;
+}
+
+.explanation-box {
+  margin-top: 18px;
+  padding: 14px 16px;
+  background: var(--bg);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.explanation-box.hidden {
+  display: none;
+}
+
+#btn-tf-quiz-next {
+  margin-top: 20px;
+}
+
+.result-breakdown {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+  font-size: 14px;
+}
+
+.breakdown-item b {
+  font-weight: 700;
+}
+
+.breakdown-correct {
+  color: var(--correct);
+}
+
+.breakdown-wrong {
+  color: var(--wrong);
+}
+
+.breakdown-skipped {
+  color: var(--skipped);
+}
+
+/* PDP (План развития) */
+.pdp-header {
+  margin-bottom: 16px;
+}
+
+.pdp-subtitle {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+
+.pdp-overall {
+  margin-bottom: 24px;
+}
+
+.pdp-overall-bar-bg {
+  height: 10px;
+  background: var(--bg);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.pdp-overall-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  width: 0%;
+  transition: width 0.3s;
+}
+
+.pdp-overall-text {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.pdp-group {
+  margin-bottom: 22px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pdp-group:last-child {
+  border-bottom: none;
+}
+
+.pdp-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.pdp-group-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.pdp-priority {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.pdp-priority-high {
+  background: rgba(255, 95, 95, 0.15);
+  border: 1px solid var(--wrong);
+  color: var(--wrong);
+}
+
+.pdp-priority-medium {
+  background: rgba(245, 166, 35, 0.15);
+  border: 1px solid var(--skipped);
+  color: var(--skipped);
+}
+
+.pdp-priority-low {
+  background: rgba(154, 160, 180, 0.15);
+  border: 1px solid var(--text-muted);
+  color: var(--text-muted);
+}
+
+.pdp-group-note {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+
+.pdp-group-bar-bg {
+  height: 6px;
+  background: var(--bg);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.pdp-group-bar-fill {
+  height: 100%;
+  background: var(--correct);
+  transition: width 0.3s;
+}
+
+.pdp-group-pct {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: block;
+  margin-bottom: 12px;
+}
+
+.pdp-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pdp-task-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.pdp-task-row:hover {
+  border-color: var(--primary);
+}
+
+.pdp-task-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  accent-color: var(--correct);
+  cursor: pointer;
+}
+
+.pdp-task-done {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+/* Экзамен Terraform Associate — симуляция */
+.btn-exam {
+  border-color: var(--skipped);
+  color: var(--skipped);
+}
+
+.btn-exam:hover:not(:disabled) {
+  border-color: var(--skipped);
+  background: rgba(245, 166, 35, 0.1);
+}
+
+.exam-intro-text {
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.exam-intro-list {
+  margin: 0 0 24px;
+  padding-left: 20px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.exam-intro-list li {
+  margin-bottom: 8px;
+}
+
+.exam-intro-list b {
+  color: var(--skipped);
+}
+
+#screen-exam-intro .actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.badge-timer {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge-timer-warning {
+  border-color: var(--wrong);
+  color: var(--wrong);
+}
+
+.exam-verdict {
+  text-align: center;
+  padding: 14px;
+  border-radius: var(--radius);
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 20px;
+}
+
+.exam-verdict-pass {
+  background: rgba(46, 204, 113, 0.15);
+  border: 1px solid var(--correct);
+  color: var(--correct);
+}
+
+.exam-verdict-fail {
+  background: rgba(255, 95, 95, 0.15);
+  border: 1px solid var(--wrong);
+  color: var(--wrong);
+}

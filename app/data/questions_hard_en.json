@@ -1,0 +1,1234 @@
+[
+ {
+  "id": "tf-h01",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "The code has `resource \"aws_instance\" \"web\" { count = var.instance_count ... }`. Later you change `count` from 3 to 2, removing the definition at index `web[1]` from the middle of the logical list (e.g., due to a condition change). Terraform might delete a different instance than you expected. Why, and how should this be fixed architecturally?",
+  "options": [
+   "This is a Terraform bug, you need to update the provider version",
+   "With `count`, resources are addressed by index (0,1,2...); reducing count or changing order can cause Terraform to recreate/delete resources at the remaining indexes differently than expected — the solution is to use `for_each` with unique keys instead of `count`",
+   "You should always set `count = 0` before changing the value to avoid the issue",
+   "Terraform never confuses indexes, the problem must be elsewhere in the code"
+  ],
+  "correct_index": 1,
+  "explanation": "`count` creates resources identified by a numeric index in state (`web[0]`, `web[1]`...). If the removed element is not the last one, all subsequent indexes shift, which can cause Terraform to interpret this as a change to existing resources rather than the deletion of one specific resource — this can lead to unexpected recreation. `for_each` with explicit keys (e.g., by name) eliminates this problem, since addressing is done by a stable key rather than by position."
+ },
+ {
+  "id": "tf-h02",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Two engineers simultaneously run `terraform apply` against the same state stored in an S3 backend without a configured DynamoDB table for locking. What can happen?",
+  "options": [
+   "Terraform will automatically block the second apply at the S3 level, conflicts are impossible",
+   "Without a DynamoDB lock table, state locking does not work for the S3 backend — a race condition is possible where both applies read/write state at the same time, which can corrupt it or lose changes",
+   "The S3 backend has built-in locking by default without needing DynamoDB",
+   "Terraform will reject the second apply with a 'state file not found' error"
+  ],
+  "correct_index": 1,
+  "explanation": "The S3 backend by itself does not provide locking — historically this required a separate DynamoDB table (the `dynamodb_table` setting in the backend configuration), which implements a distributed lock via a conditional write. Without it, two parallel applies can modify state at the same time, which can corrupt it or lose resource data."
+ },
+ {
+  "id": "tf-h03",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "A module declares a variable `variable \"ami_id\" { type = string }` with no default, and the module is called without passing `ami_id`. There is also a `data \"aws_ami\" \"latest\"` in the parent module. What happens when running `terraform plan`?",
+  "options": [
+   "Terraform will automatically substitute the value from the `aws_ami` data source if the variable name matches semantically",
+   "Terraform will fail with an error, requiring the value of `ami_id` to be explicitly passed when calling the module, since there's no default and Terraform does not automatically link module variables to a data source by meaning",
+   "The variable will get the value null, and plan will continue with a warning",
+   "Terraform will use the last value from state as a fallback"
+  ],
+  "correct_index": 1,
+  "explanation": "Terraform makes no assumptions about any connection between module variables and resources/data sources in the parent config based on name or meaning — variables without a default are required and must be explicitly passed via a `module { ami_id = data.aws_ami.latest.id }` block. Without this, you get a 'no value for required variable' error."
+ },
+ {
+  "id": "tf-h04",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "A configuration uses `lifecycle { create_before_destroy = true }` on an `aws_security_group` resource, which is also referenced via `aws_security_group_rule` in another resource that depends on the old ID. When the SG is replaced (a change to an immutable attribute), what can happen without additional measures?",
+  "options": [
+   "Terraform will automatically update all dependent references to the new ID without errors",
+   "A conflict can arise: the old SG cannot be deleted while dependent resources (rules) still reference its ID, even with create_before_destroy — you need to explicitly set lifecycle on the dependent resources too, or reconsider the architecture (e.g., inline rules)",
+   "create_before_destroy fully and automatically resolves any dependency issues for all related resources",
+   "Terraform will refuse to run plan in advance if it detects a potential conflict"
+  ],
+  "correct_index": 1,
+  "explanation": "`create_before_destroy` changes the order for a specific resource (create the new one before deleting the old one), but it does not automatically propagate to dependent resources. If something else is still hard-tied to the old ID and doesn't correctly pick up the new resource's creation (no create_before_destroy, or incorrect implicit/explicit dependencies), a dependency cycle or a 'resource in use' deletion error can occur."
+ },
+ {
+  "id": "tf-h05",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "After `terraform import aws_instance.web i-0123456789`, the resource appears in state, but the next `terraform plan` shows many changes (diff), even though the real infrastructure hasn't changed. Why does this happen, and what should be done?",
+  "options": [
+   "Import always breaks state, you should roll it back with terraform state rm and stop using import",
+   "Import adds the resource to state but does NOT generate HCL configuration — if the existing `resource` block in the code doesn't exactly match the real attributes of the imported resource, Terraform will show a diff that needs to be resolved manually by adjusting the configuration to match the real state",
+   "This is a bug in the specific provider, you need to update the AWS provider version",
+   "The diff means the real infrastructure was changed by someone else at the same time as the import"
+  ],
+  "correct_index": 1,
+  "explanation": "`terraform import` only links an existing physical resource to an address in state — it does not create or adjust HCL code automatically. If the manually written `resource` block doesn't reflect the exact current attribute values (e.g., different tags, a different instance_type), `plan` will show a difference between the code and the actual state, which needs to be resolved by editing the HCL to match reality (or conversely, deliberately applying the changes)."
+ },
+ {
+  "id": "tf-h06",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code:\n```\nresource \"aws_instance\" \"web\" {\n  count         = length(var.subnet_ids)\n  subnet_id     = var.subnet_ids[count.index]\n  ami           = \"ami-12345\"\n  instance_type = \"t2.micro\"\n}\n```\nvar.subnet_ids = [\"subnet-a\", \"subnet-b\", \"subnet-c\"]. An engineer removes \"subnet-b\" from the list (leaving [\"subnet-a\", \"subnet-c\"]). What will the next terraform plan show?",
+  "options": [
+   "Only the removal of one instance — the one that was in subnet-b, the other two remain unchanged",
+   "aws_instance.web[2] will be destroyed, and aws_instance.web[1] will be changed (recreated or updated) — because the element at index 1 now refers to \"subnet-c\" instead of its old value after the middle element was removed; effectively the wrong instance gets destroyed compared to the one physically located in subnet-b",
+   "Terraform won't notice the change, since length(var.subnet_ids) only decreased by one",
+   "All three instances will be recreated"
+  ],
+  "correct_index": 1,
+  "explanation": "This is the classic count index-addressing problem: removing a middle element from the list shifts all subsequent elements back by one position. Terraform sees that web[1] should now point to subnet-c (it used to be subnet-b) — it treats this as a change to the existing web[1] resource, not as deletion of the resource that was actually in subnet-b. web[2] is removed as now-excess. The net effect: the wrong instance gets destroyed. The fix is for_each keyed by the subnet_id value."
+ },
+ {
+  "id": "tf-h07",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the module:\n```\n# modules/app/main.tf\nresource \"aws_instance\" \"app\" {\n  ami = data.aws_ami.latest.id\n}\n\ndata \"aws_ami\" \"latest\" {\n  most_recent = true\n  owners      = [\"self\"]\n  filter {\n    name   = \"name\"\n    values = [\"my-app-*\"]\n  }\n}\n```\nOn a repeated terraform apply (with no changes to the .tf files), a diff on ami appears, even though the real instance hasn't changed. Why?",
+  "options": [
+   "This is a bug in the state file, the ami value needs to be manually fixed",
+   "The aws_ami data source is recomputed on every plan/apply, and if a new AMI has appeared in the account (e.g., because a CI pipeline automatically rebuilt the image), most_recent = true will return a different id — causing a diff, even though neither the .tf code nor the actual EC2 instance was manually changed",
+   "This is a bug in a specific version of the AWS provider, roll back the version",
+   "Data sources in Terraform are cached only once on the first apply and should never change — so the problem must be in the filter configuration"
+  ],
+  "correct_index": 1,
+  "explanation": "Data sources are not stored in state as immutable — they are recomputed (refreshed) on every plan/apply. most_recent = true is a common source of a \"drifting\" plan: if a new AMI appears in the background (image rebuild), the data source returns a new id, and Terraform proposes updating (or recreating) the resource using that id, even if no one directly touched the .tf code or the instance itself."
+ },
+ {
+  "id": "tf-h08",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code:\n```\nresource \"aws_security_group\" \"web\" {\n  name = \"web-sg\"\n  lifecycle {\n    create_before_destroy = true\n  }\n}\n\nresource \"aws_instance\" \"app\" {\n  vpc_security_group_ids = [aws_security_group.web.id]\n}\n```\nWhen changing the security group's name (an immutable attribute that forces recreation), apply fails with an error like \"security group in use\". What's the cause, given that create_before_destroy is enabled?",
+  "options": [
+   "create_before_destroy only works for aws_instance, not for aws_security_group",
+   "create_before_destroy guarantees the new SG is created before the old one is destroyed, but it doesn't automatically switch the aws_instance.app reference to the new SG before the old one is removed, unless Terraform recomputes aws_instance.app within the same apply — the old SG remains attached to the running instance and cannot be deleted until the reference is updated",
+   "The error means insufficient IAM permissions to delete the security group",
+   "create_before_destroy needs to be explicitly declared on aws_instance.app too, not only on aws_security_group.web"
+  ],
+  "correct_index": 1,
+  "explanation": "create_before_destroy solves the ordering problem (create the new one before destroying the old one) for the SG resource itself, but it doesn't remove the need for the dependent resource (the instance) to explicitly switch to the new SG before the old one can be safely deleted. If the dependency graph and operation order don't guarantee that aws_instance.app updates its security group before the old SG deletion is attempted, the old SG is still in use -> deletion error. This is usually fixed by properly structuring dependencies/timing or reconsidering the architecture (e.g., inline security_group_rule instead of a separate resource)."
+ },
+ {
+  "id": "tf-h09",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "A team uses the structure:\n```\nenvironments/\n  dev/main.tf     (backend key = \"dev/terraform.tfstate\")\n  prod/main.tf    (backend key = \"prod/terraform.tfstate\")\n```\nBoth environments reference the same local module ../../modules/app without versioning (just a relative path). What problem is typical of this approach when promoting changes from dev to prod?",
+  "options": [
+   "No problem at all — since state is separated by backend key, the environments are fully isolated, and this is a best practice",
+   "A change to the app module immediately affects both environments at once (there's no module versioning), so it's impossible to test a change only in dev before it reaches prod — effectively there's no controlled promotion process for the module's code between environments",
+   "Terraform will refuse to apply, since the same module cannot be used with two backends at once",
+   "The only issue is that both environments will need to use the same provider alias"
+  ],
+  "correct_index": 1,
+  "explanation": "Separating state by backend key (or by workspace) isolates resource state, but not the module code. If a module is referenced via a relative local path without a version (source = \"../../modules/app\"), any change to the module's files immediately becomes \"visible\" in every environment that uses it, on the next plan/apply — there's no intermediate step of \"updated in dev, tested, and only then pinned a version for prod\". The fix is to version the module (git tag / registry version) and explicitly update the ref/version in each environment separately."
+ },
+ {
+  "id": "tf-h10",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code:\n```\nresource \"aws_db_instance\" \"main\" {\n  identifier     = \"prod-db\"\n  engine         = \"postgres\"\n  instance_class = \"db.t3.micro\"\n  ...\n}\n```\nThe terraform plan output shows:\n```\n  # aws_db_instance.main will be destroyed\n  # (because aws_db_instance.main is not in configuration)\n  - resource \"aws_db_instance\" \"main\" {\n      - identifier = \"prod-db\" -> null\n      ...\n    }\n```\neven though the resource block is still present in the .tf file. What's the most likely cause?",
+  "options": [
+   "There's an error in resource definition inside the AWS provider",
+   "Most likely the resource was renamed (e.g., aws_db_instance.main -> aws_db_instance.database) without using a moved block or terraform state mv — Terraform sees the old address as missing from the configuration (hence marked for destroy) and the new address as a new resource (create), instead of a rename",
+   "This always means a typo in the backend key",
+   "The resource was manually deleted from the cloud by someone else"
+  ],
+  "correct_index": 1,
+  "explanation": "If the message \"will be destroyed (because ... is not in configuration)\" appears even though there seems to be a resource block in the files — it's almost certainly because the resource address (type + local name) changed compared to what's recorded in state (e.g., the local block name was renamed). Terraform matches resources by address, not by meaning/attributes — without a moved block or explicit terraform state mv, it interprets this as \"old address disappeared -> destroy\" + \"new address appeared -> create\", which for a database is extremely dangerous (data loss)."
+ },
+ {
+  "id": "tf-h11",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code:\n```\nterraform {\n  backend \"s3\" {\n    bucket         = \"my-tf-state\"\n    key            = \"app/terraform.tfstate\"\n    region         = \"eu-west-1\"\n    dynamodb_table = \"tf-locks\"\n  }\n}\n```\nDuring a terraform apply run, the CI runner process was killed abruptly (OOM kill) right in the middle of apply. On the next terraform plan run on a different runner, it fails with \"Error acquiring the state lock\". What should be done?",
+  "options": [
+   "Delete the S3 bucket and create a new one — the old state is corrupted",
+   "Confirm that the previous process is indeed not still running (rather than a temporary network issue), and then release the stuck lock with terraform force-unlock <LOCK_ID> (LOCK_ID is taken from the error text), rather than manually deleting the DynamoDB table or files",
+   "Downgrade the Terraform CLI to a previous version",
+   "Just keep retrying terraform apply in a loop until the lock releases itself"
+  ],
+  "correct_index": 1,
+  "explanation": "An abrupt process termination during apply can leave a lock record in DynamoDB hanging (not released cleanly). The correct approach is terraform force-unlock <LOCK_ID>, after first making sure no other process is concurrently working with this state (otherwise you risk a race condition and state corruption). Manually deleting the bucket/table is an excessive and risky operation."
+ },
+ {
+  "id": "tf-h12",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code:\n```\nresource \"aws_lb_target_group\" \"tg\" {\n  name = \"app-tg-${substr(uuid(), 0, 8)}\"\n  ...\n}\n```\nOn every terraform plan (even with no real changes anywhere else), a diff appears like ~ name = \"app-tg-abc12345\" -> \"app-tg-f9e8d7c6\". Why does this constant diff occur, and how do you fix it?",
+  "options": [
+   "This is normal behavior for uuid() — it's expected, the diff can be ignored",
+   "The uuid() function generates a new random value every time the plan is evaluated, so the resource name appears \"changed\" on every plan — to get a stable value computed once at creation time and stored in state, you need to use a random_id/random_string resource (whose value is fixed in state) instead of calling the uuid() function directly in the attribute",
+   "The problem is that the backend doesn't support saving random values",
+   "substr() is corrupting the result of uuid(), format() should be used instead of substr()"
+  ],
+  "correct_index": 1,
+  "explanation": "uuid() (like timestamp()) is a non-deterministic function: it is recomputed on every terraform plan/apply, not just once when the resource is created. Using its result directly in a resource attribute causes a perpetual diff on every plan. The correct pattern is to move the randomness into a separate resource (random_id, random_string, etc.), whose value is computed once and fixed in state at creation time, and remains stable afterward."
+ },
+ {
+  "id": "tf-h13",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "A pipeline has two sequential steps:\n```\nstep 1: terraform plan -out=tfplan\nstep 2: (3-hour wait for manual approval)\nstep 3: terraform apply tfplan\n```\nDuring the 3-hour wait, another engineer manually deleted one of the resources present in the saved tfplan. What happens at the apply tfplan step?",
+  "options": [
+   "Terraform will silently recompute the plan before apply, taking the new state into account",
+   "Terraform will attempt to apply the saved (stale) plan, and apply will fail with an error (e.g., that a resource the plan expected to update was not found) — a saved plan does not protect against changes to the real infrastructure that happen after it was computed",
+   "Apply will automatically recreate the resource with no errors, since that was part of the original plan",
+   "Terraform will block apply in advance, already at the tfplan-loading stage, if it detects a discrepancy"
+  ],
+  "correct_index": 1,
+  "explanation": "A saved plan file pins down the set of operations computed at the time of plan, but it does not block changes to the real infrastructure between plan and apply. If a resource that the plan intended to, say, update, was manually deleted in the meantime, apply will fail with an error (the provider will report the resource as not found) — a saved plan guarantees only what should be done, assuming the state hasn't changed since plan, not protection against concurrent infrastructure drift."
+ },
+ {
+  "id": "tf-h14",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code:\n```\nvariable \"instance_type\" {\n  type    = string\n  default = \"t2.micro\"\n}\n```\nAt run time, all of the following are specified simultaneously: a terraform.tfvars file (instance_type = \"t2.small\"), an environment variable TF_VAR_instance_type=t2.medium, and a command-line flag -var=\"instance_type=t2.large\". Which value will actually be applied?",
+  "options": [
+   "t2.micro (the default value always has the highest priority)",
+   "t2.large — the command-line -var flag has the highest priority among the listed sources",
+   "t2.medium — TF_VAR_* environment variables have the highest priority",
+   "t2.small — values from .tfvars files have the highest priority"
+  ],
+  "correct_index": 1,
+  "explanation": "Terraform's variable precedence (lowest to highest): the default value in code -> TF_VAR_* environment variables -> the terraform.tfvars file (and terraform.tfvars.json) -> *.auto.tfvars files (alphabetically) -> -var / -var-file command-line flags (in the order given, with later ones winning). So an explicit CLI -var overrides all other sources, including the tfvars file and the environment variable."
+ },
+ {
+  "id": "tf-h15",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the module code:\n```\n# modules/vpc/main.tf\nresource \"aws_vpc\" \"this\" {\n  cidr_block = var.cidr_block\n}\n\nresource \"aws_subnet\" \"private\" {\n  for_each   = var.private_subnets\n  vpc_id     = aws_vpc.this.id\n  cidr_block = each.value\n}\n```\nIn the root module, the module.vpc.private_subnets for_each call changes to a different set of keys (e.g., keys \"a\", \"b\", \"c\" are replaced with \"az1\", \"az2\", \"az3\" with the same CIDR blocks). What happens on apply?",
+  "options": [
+   "Terraform will realize the CIDR blocks haven't changed and simply rename the keys in state without recreating the subnets",
+   "All subnets from the old keys (\"a\", \"b\", \"c\") will be destroyed, and new subnets created with the new keys (\"az1\", \"az2\", \"az3\") — Terraform matches for_each instances by key, not by attribute value, so changing the set of keys is treated as destroying old instances and creating new ones, even if the actual configuration (CIDR) hasn't changed",
+   "Apply will fail with a validation error, since for_each keys cannot be changed after the first apply",
+   "The change will only apply to the missing keys, and the remaining subnets will automatically stay untouched"
+  ],
+  "correct_index": 1,
+  "explanation": "for_each uniquely identifies each resource instance by its key. If the set of keys changes (even if conceptually these are the \"same\" subnets, just with different name-keys), Terraform has no way to automatically match the old instance to the new one — it sees the old keys disappearing (destroy) and new ones appearing (create). To simply rename the keys without recreating the actual resources, you need a moved block (Terraform 1.1+) explicitly mapping the old index/key to the new one."
+ },
+ {
+  "id": "tf-h16",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code:\n```\ndata \"terraform_remote_state\" \"network\" {\n  backend = \"s3\"\n  config = {\n    bucket = \"tf-state-bucket\"\n    key    = \"network/terraform.tfstate\"\n    region = \"eu-west-1\"\n  }\n}\n\nresource \"aws_instance\" \"app\" {\n  subnet_id = data.terraform_remote_state.network.outputs.subnet_id\n}\n```\nWhat's a drawback of this way of passing data between states (compared to, say, explicit output/input variables between modules within a single root module)?",
+  "options": [
+   "This isn't supported at all in current Terraform versions",
+   "data.terraform_remote_state reads the entire state of another project (including potentially sensitive data in other outputs/attributes) and creates an implicit runtime dependency between fully independent configurations/teams — and Terraform doesn't build an explicit dependency graph between the projects themselves (only between resources within the current state), which makes it harder to track who depends on whom",
+   "This method only works with the local backend, not with s3",
+   "The terraform_remote_state data source cannot be used inside a resource block, only inside an output"
+  ],
+  "correct_index": 1,
+  "explanation": "terraform_remote_state reads another project's entire state, which means potential access to all of its outputs (and, in some cases, the risk of exposing sensitive data if something in the other state isn't marked sensitive) — plus it creates a hidden cross-project dependency that isn't visible as an explicit graph at the organization/CI level (unlike connections within a single root module via module outputs). Narrower data-sharing mechanisms (SSM Parameter Store, explicit APIs, limited outputs) are often preferred precisely because of these risks."
+ },
+ {
+  "id": "tf-h17",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code with a provisioner:\n```\nresource \"aws_instance\" \"web\" {\n  ami = \"ami-12345\"\n  provisioner \"local-exec\" {\n    command = \"curl -X POST https://api.example.com/register?ip=${self.public_ip}\"\n  }\n  provisioner \"local-exec\" {\n    when    = destroy\n    command = \"curl -X POST https://api.example.com/deregister?ip=${self.public_ip}\"\n  }\n}\n```\nWhat happens to the destroy-time provisioner (when = destroy) if the resource is being destroyed via terraform apply -destroy or a regular terraform destroy, but self.public_ip is no longer available at that point (e.g., the instance was already manually stopped and lost its public IP)?",
+  "options": [
+   "Terraform will automatically substitute the last known public_ip value from state before destroying, regardless of the current actual state — the destroy-time provisioner uses attribute values fixed in state at the start of destroy, not values freshly queried from the provider",
+   "The destroy-time provisioner is always skipped if the resource was manually modified",
+   "Terraform will fail with a validation error before destroy even begins",
+   "self in a destroy-time provisioner always refers to the resource replacing the one being destroyed, not the resource being destroyed itself"
+  ],
+  "correct_index": 0,
+  "explanation": "A destroy-time provisioner (when = destroy) runs before the resource is actually deleted, and uses attribute values from the current state (the last known state recorded by Terraform), rather than making a live call to the provider's API at the moment of deletion. So even if the real IP has already changed/disappeared for external reasons, the provisioner will receive exactly the value fixed in state."
+ },
+ {
+  "id": "tf-h18",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code:\n```\nresource \"aws_iam_policy\" \"app\" {\n  name   = \"app-policy\"\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Effect   = \"Allow\"\n      Action   = [\"s3:GetObject\"]\n      Resource = \"${aws_s3_bucket.data.arn}/*\"\n    }]\n  })\n}\n```\nAfter renaming the S3 bucket (changing the bucket argument, which causes aws_s3_bucket.data to be recreated with a new ARN), the next apply also updates aws_iam_policy.app, in addition to the bucket itself. Why does this happen, if the policy itself wasn't changed in the code?",
+  "options": [
+   "This is unrelated to the bucket — the IAM policy is automatically updated once a day on a schedule",
+   "aws_iam_policy.app references aws_s3_bucket.data.arn inside jsonencode() — this creates an explicit data dependency (implicit dependency): when the bucket is recreated and gets a new ARN, the value inside the policy changes, so Terraform must update the policy resource too, so the JSON content matches the new ARN",
+   "aws_iam_policy is always recreated on every apply regardless of dependencies",
+   "jsonencode() only caches the value at plan time, so the arn is always \"new\" during apply"
+  ],
+  "correct_index": 1,
+  "explanation": "A reference to aws_s3_bucket.data.arn inside an expression (even nested deep inside jsonencode) creates an implicit dependency between resources. Terraform builds its dependency graph based on such references in expressions — if recreating the bucket changes the value of arn, any resource using that value (here, the policy JSON) must be recomputed/updated to stay consistent with the new state of the dependency."
+ },
+ {
+  "id": "tf-h19",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Given the code (Terraform 1.7+):\n```\nremoved {\n  from = aws_instance.legacy\n\n  lifecycle {\n    destroy = false\n  }\n}\n```\nAfter applying this block and removing the corresponding resource block for aws_instance.legacy from the code, what happens to the actual EC2 instance on the next apply?",
+  "options": [
+   "The instance will be immediately terminated in the cloud, as with a normal resource block removal",
+   "The instance will keep running unchanged in the cloud — Terraform will only remove the record for this resource from its state, stopping management of it; the actual EC2 instance continues to exist and must be deleted/administered outside of Terraform if needed",
+   "Terraform will move the instance to a stopped (but not deleted) state",
+   "A removed block without specifying to is equivalent to a terraform state mv into nowhere, which causes an error"
+  ],
+  "correct_index": 1,
+  "explanation": "removed { from = ..., lifecycle { destroy = false } } is a way to take a resource out from under Terraform's management (remove its record from state), explicitly specifying that the physical resource should not be touched/deleted. This differs from simply removing the resource block from the code, which would attempt a destroy on the next apply."
+ },
+ {
+  "id": "tf-h20",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "An organization has run triggers configured in HCP Terraform: an apply in the \"network\" workspace automatically triggers a run in the \"app\" workspace. The \"app\" workspace also has a speculative plan configured on pull requests and separately a manual apply on the main branch. What happens if the run in the \"network\" workspace fails at the apply stage?",
+  "options": [
+   "The run in the \"app\" workspace will still start on schedule, regardless of network's result",
+   "The run trigger only fires on a SUCCESSFUL run (apply) completion in the source workspace (network) — if apply there fails, the run in the dependent workspace \"app\" will not be automatically triggered via the run trigger",
+   "The run trigger will fire, but immediately go to an \"errored\" state without running plan",
+   "Run triggers in HCP Terraform only react to plan events, not apply, so an apply failure doesn't matter"
+  ],
+  "correct_index": 1,
+  "explanation": "Run triggers in HCP Terraform launch a run in the dependent workspace specifically after a successful apply in the source workspace. If apply in the source workspace fails, the trigger chain does not proceed — this makes sense, since triggering a run in the dependent workspace based on incomplete/failed changes in the source would be pointless and potentially dangerous."
+ },
+ {
+  "id": "tf-h21",
+  "topic": "Terraform",
+  "question": "In an organization on HCP Terraform, a Sentinel policy is attached with enforcement level \"soft-mandatory\" for all workspaces, checking that all S3 buckets have encryption enabled. An engineer runs apply, and the plan violates this policy. What happens?",
+  "options": [
+   "Apply is immediately and unconditionally blocked with no way to proceed — soft-mandatory behaves like hard-mandatory",
+   "The policy check fails, but a user with sufficient permissions (policy override permission) can explicitly override the result and proceed — that's the whole point of 'soft', unlike 'hard-mandatory', which no one can override",
+   "The policy check completely ignores the violation and just logs a warning, apply proceeds as usual",
+   "soft-mandatory only applies to plan and is not checked during apply"
+  ],
+  "correct_index": 1,
+  "explanation": "Sentinel supports three levels: advisory (violation is only logged, apply is not blocked), soft-mandatory (apply is blocked, but a user with override rights can knowingly proceed, which is recorded in the audit log), and hard-mandatory (the block is unconditional, override is impossible for anyone, including the organization owner).",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h22",
+  "topic": "Terraform",
+  "question": "Given the code (Terraform 1.5+):\n```\nimport {\n  to = aws_instance.web\n  id = \"i-0123456789abcdef0\"\n}\n\nresource \"aws_instance\" \"web\" {\n  ami           = \"ami-12345\"\n  instance_type = \"t2.micro\"\n}\n```\nWhat is the key difference between this declarative import block and the terraform import aws_instance.web i-0123456789abcdef0 command?",
+  "options": [
+   "No difference — the import block is just new syntax for the same manual interactive command",
+   "The import block can be saved in a .tf file and runs as part of terraform plan/apply (including in an automated CI/CD pipeline without interactive input), whereas terraform import is a one-off interactive CLI command that isn't saved in the code and isn't reproduced by a regular apply",
+   "The import block only works with a local backend, terraform import only with remote",
+   "The import block automatically generates a resource block in the configuration, terraform import does not"
+  ],
+  "correct_index": 1,
+  "explanation": "The import block (since Terraform 1.5) declaratively describes an import right in the configuration — Terraform picks it up at plan/apply time, which makes the import reproducible and CI/CD-friendly (unlike the one-off terraform import command, which must be run manually each time locally). As before, a resource block with the corresponding attributes still needs to be written by hand (or via terraform plan -generate-config-out).",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h23",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nresource \"aws_instance\" \"web\" {\n  ami           = \"ami-12345\"\n  instance_type = \"t2.micro\"\n\n  lifecycle {\n    postcondition {\n      condition     = self.public_ip != \"\"\n      error_message = \"The instance must receive a public IP.\"\n    }\n  }\n}\n```\nAt which stage is the postcondition check performed, and what happens if it fails?",
+  "options": [
+   "The check runs at plan time, before the resource is created — apply simply won't start",
+   "The check runs AFTER the resource has actually been created/updated (unlike precondition, which is checked BEFORE) — if the condition is false, apply fails with an error even though the resource has already been created in the cloud, which helps catch the situation 'resource created, but not in the expected state'",
+   "postcondition is only checked during terraform destroy",
+   "The postcondition condition only affects the plan output but cannot fail apply"
+  ],
+  "correct_index": 1,
+  "explanation": "precondition is checked before an operation on a resource (can prevent a pointless apply attempt), while postcondition is checked after it, based on the actual self attributes (e.g. self.public_ip). If the postcondition is false, apply fails with an error even though the resource itself was successfully created by the cloud provider — this signals a mismatch between the result and expectations, not a failure of the creation itself.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h24",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nresource \"aws_launch_template\" \"app\" {\n  name_prefix = \"app-\"\n  image_id    = var.ami_id\n}\n\nresource \"aws_autoscaling_group\" \"app\" {\n  launch_template {\n    id      = aws_launch_template.app.id\n    version = \"$Latest\"\n  }\n\n  lifecycle {\n    replace_triggered_by = [aws_launch_template.app.latest_version]\n  }\n}\n```\nWhat is replace_triggered_by used for here?",
+  "options": [
+   "To automatically recreate the launch_template when the ASG changes",
+   "To explicitly force Terraform to REPLACE (destroy+create) the aws_autoscaling_group resource when latest_version of the launch_template changes — even if the launch_template.version = \"$Latest\" attribute itself hasn't formally changed in state, which without this directive wouldn't trigger the ASG's replacement",
+   "To prevent the ASG from being replaced on any launch_template changes",
+   "replace_triggered_by only works with data sources, not resources"
+  ],
+  "correct_index": 1,
+  "explanation": "replace_triggered_by in a lifecycle block forcibly marks a resource for replacement when a specified value changes (an attribute of another resource or the resource itself), even if that value isn't used directly in the current resource's configuration — a typical case: an ASG referencing $Latest doesn't 'see' a launch template version change as a diff, so an explicit trigger is needed to make the ASG actually pick up the new version via replacement.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h25",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nvariable \"server\" {\n  type = object({\n    name = string\n    tags = optional(map(string), {})\n    size = optional(string, \"small\")\n  })\n}\n```\nWhat happens if the calling code passes var.server = { name = \"web\" } (without tags and size)?",
+  "options": [
+   "Terraform fails validation — all object fields must be specified, even those marked optional",
+   "tags will get the default value {}, and size will get \"small\", as specified by the second argument to optional() — Terraform fills in missing fields with their default values, not null",
+   "tags and size will get the value null, since optional() only allows omitting a field but doesn't set a default",
+   "optional() with a default value only works for primitive types (string, number, bool), not for map"
+  ],
+  "correct_index": 1,
+  "explanation": "optional(<type>, <default>) in an object() definition allows a specific field to be omitted when calling — if a default is passed as the second argument, the missing field will get exactly that value (not null); if no default is specified, the missing field becomes null.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h26",
+  "topic": "Terraform",
+  "question": "Given the code in the root module:\n```\nmodule \"database\" {\n  source     = \"./modules/rds\"\n  depends_on = [module.network]\n}\n```\nWhy might you need depends_on at the whole-module level (module.network), rather than on a specific resource inside modules/rds?",
+  "options": [
+   "depends_on between modules is not supported by Terraform, such code would cause a validation error",
+   "To guarantee that ALL resources inside module.network are fully applied before beginning to apply ANY resources inside module.database — useful when the dependency is real (e.g. DB resources must be created in an already-existing VPC), but isn't expressed directly by passing one module's output into another's input (implicit dependency), so Terraform can't determine the order automatically",
+   "It's the only way to pass one module's outputs into another",
+   "depends_on at the module level only affects the order shown in plan output, not the actual apply order"
+  ],
+  "correct_index": 1,
+  "explanation": "depends_on can be specified not only on individual resources, but also on an entire module call — this forces Terraform to finish applying (create/update) all resources of the dependent module before starting anything inside the current one. It's used when explicit output↔input passing between modules is unavailable or insufficient to express the needed ordering.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h27",
+  "topic": "Terraform",
+  "question": "The state file for a project has grown to several thousand resources in a single workspace, causing terraform plan to take 10+ minutes even with no real changes. Which of the following approaches is the recommended way to solve exactly this performance problem (rather than just a temporary workaround)?",
+  "options": [
+   "Always run plan with the -refresh=false flag to permanently disable syncing with real infrastructure",
+   "Split the monolithic configuration into several separate states/workspaces along logical boundaries (e.g. by infrastructure layers: network, data, compute — or by services), using data sources/remote_state to link between them — this reduces the number of resources Terraform must process per plan",
+   "Delete all resources older than 30 days from state using terraform state rm",
+   "Increase -parallelism to the maximum possible value — this will guaranteed solve the plan performance problem regardless of the cause"
+  ],
+  "correct_index": 1,
+  "explanation": "-refresh=false speeds up plan, but at the cost of the risk of working with stale data about the real state — this is a workaround, not a root-cause fix. The real solution for scaling is decomposing one huge state into several smaller ones (along responsibility/lifecycle boundaries), which reduces the volume of data processed on every plan/refresh and lowers the blast radius of mistakes. -parallelism only speeds up the actual apply operations against the provider, not building the plan and refreshing state.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h28",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nvariable \"db_password\" {\n  type      = string\n  sensitive = true\n}\n\nresource \"aws_db_instance\" \"main\" {\n  password = var.db_password\n  # a typo in another argument causes a validation error at plan time\n  engine   = \"postgre\"  \n}\n```\nThe AWS provider returns a validation error message that includes the entire resource configuration object that was passed, including the password in plain text. What happens to this error message in the Terraform CLI output?",
+  "options": [
+   "Terraform always fully redacts (censors) absolutely any text in which a sensitive variable's value is found, regardless of the text's source",
+   "Terraform redacts (replaces with (sensitive value)) sensitive variable values ONLY in its own output (plan/apply diff, state, output) — if a specific value leaks into error text generated by the provider/API itself (rather than directly generated by Terraform), it may NOT be redacted, so marking a variable sensitive doesn't provide a 100% guarantee that the value will never end up in a log",
+   "This situation is technically impossible, AWS providers never include argument values in error messages",
+   "sensitive = true automatically encrypts the value before sending it to the provider's API"
+  ],
+  "correct_index": 1,
+  "explanation": "Marking sensitive = true makes Terraform itself hide the value in places it controls (the diff in plan/apply, state when shown via show, output values). But if the provider (an external API) itself includes the passed value in error text (e.g. during server-side validation), Terraform can't redact text generated by third-party code — a known limitation to keep in mind when working with secrets.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h29",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\ndata \"terraform_remote_state\" \"network\" {\n  backend = \"s3\"\n  config = {\n    bucket   = \"prod-network-state\"\n    key      = \"network/terraform.tfstate\"\n    region   = \"eu-west-1\"\n    role_arn = \"arn:aws:iam::111111111111:role/tf-state-reader\"\n  }\n}\n```\nWhy is role_arn specified here in the backend configuration for reading remote state?",
+  "options": [
+   "role_arn is mandatory for ANY use of terraform_remote_state, regardless of account",
+   "role_arn is needed here because the network state is stored in a DIFFERENT AWS account (111111111111) than the one the current apply runs from — assume role lets you temporarily obtain permissions to read the S3 bucket in someone else's account, which is typical for cross-account architectures (e.g. a separate account dedicated to shared network infrastructure)",
+   "role_arn is used to encrypt the state, not to access it",
+   "Without role_arn, terraform_remote_state can't read an S3 backend at all, regardless of account"
+  ],
+  "correct_index": 1,
+  "explanation": "role_arn in the backend/terraform_remote_state data source configuration triggers an AssumeRole to obtain temporary credentials in another AWS account — a standard pattern for cross-account access to shared infrastructure (e.g. reading network state from a separate 'shared services' account in a multi-account AWS Organization).",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h30",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nresource \"aws_instance\" \"web\" {\n  for_each = var.servers\n\n  dynamic \"ebs_block_device\" {\n    for_each = each.value.extra_disks\n    content {\n      device_name = ebs_block_device.value.device\n      volume_size = ebs_block_device.value.size\n    }\n  }\n}\n```\nWhy does the inner dynamic block use ebs_block_device.value instead of each.value?",
+  "options": [
+   "each.value and ebs_block_device.value are complete synonyms in this context, there is no difference",
+   "each.value/each.key refer to the outer for_each iterator of the resource itself (over var.servers); inside a dynamic block there's its own iterator whose default name equals the block's name (ebs_block_device), and ebs_block_device.value/.key refer to the current element of the INNER for_each (each.value.extra_disks) — using each.value inside content{} would refer to the outer iterator, not the current disk",
+   "ebs_block_device.value only works in top-level resource blocks, not inside dynamic",
+   "This is an error — a dynamic block cannot be nested inside a resource that has for_each"
+  ],
+  "correct_index": 1,
+  "explanation": "Every for_each — whether on the resource itself or inside a dynamic block — has its own named iterator. By default, a dynamic block's iterator name matches the block's own name (here, ebs_block_device), unless overridden with iterator = <name>. Using each.value inside content{} would refer to the outer for_each iterator (var.servers), not the current disk from each.value.extra_disks — hence ebs_block_device.value is needed.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h31",
+  "topic": "Terraform",
+  "question": "Two engineers work on different OSes (one on Windows, the other on Linux/ARM Mac). After git pull, the second engineer's terraform init fails with a checksum mismatch error for the hashicorp/aws provider, even though .terraform.lock.hcl wasn't manually edited. What is the most likely cause and correct fix?",
+  "options": [
+   "The .terraform.lock.hcl file is corrupted and should be completely deleted and regenerated without checksum verification",
+   "The lock file, first committed by one engineer, contains provider checksums only for their platform (e.g. only for Windows/amd64) — the second engineer works on a different platform (darwin/arm64), for which the lock file has no checksums; the fix is to run terraform providers lock explicitly specifying ALL needed platforms (-platform=windows_amd64 -platform=darwin_arm64) and commit the updated lock file",
+   "The problem is related to the Terraform CLI version itself, not the platform — the CLI needs to be updated to the latest version",
+   "A checksum mismatch means the provider has been compromised and must be immediately replaced with another one"
+  ],
+  "correct_index": 1,
+  "explanation": "By default, terraform init only records provider checksums in .terraform.lock.hcl for the platform where init was run. If a team works across multiple different OSes/architectures on the same repository, terraform providers lock -platform=... should be run for each platform in use (ahead of time or upon first encountering the issue), so the lock file contains all needed checksums — a standard practice for teams with heterogeneous development environments.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h32",
+  "topic": "Terraform",
+  "question": "During a terraform apply on 50 resources, the AWS provider returned a rate-limiting error on the 30th resource, and apply failed, leaving 29 resources created and updated in state, while the remaining 20 were left untouched. What approach to retrying is correct and safe?",
+  "options": [
+   "You must first roll back (destroy) all 29 successfully created resources, then run apply from scratch",
+   "Simply run terraform apply again with no flags — based on the current state (where 29 resources are already marked as applied) and the current configuration, Terraform itself will determine what still needs to be created/changed and will continue from where the failure occurred — this is standard behavior; special flags (like -target) are not needed just to continue",
+   "You need to manually edit the state file, removing all 29 already-created resources, before repeating apply",
+   "Terraform doesn't support a partially interrupted apply — after an error the state always becomes unusable for further work"
+  ],
+  "correct_index": 1,
+  "explanation": "Terraform is designed to be idempotent and resilient to partial apply failures: state correctly records what was already applied up to the point of failure. A regular subsequent terraform apply will recompute the plan based on the current state + configuration and continue exactly with the remaining changes — deliberately rolling back already successfully applied resources or manually editing state in this scenario is not required and unnecessarily increases risk.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h33",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nprovider \"aws\" {\n  alias  = \"euwest\"\n  region = \"eu-west-1\"\n}\n\nprovider \"aws\" {\n  alias  = \"apeast\"\n  region = \"ap-east-1\"\n}\n\nresource \"aws_instance\" \"web\" {\n  for_each = var.deployments  # { \"eu\" = { provider_key = \"euwest\" }, \"ap\" = { provider_key = \"apeast\" } }\n  provider = each.value.provider_key == \"euwest\" ? aws.euwest : aws.apeast\n  ami      = var.ami_id\n}\n```\nWhy is this code with dynamic provider selection via an expression inside for_each a configuration error?",
+  "options": [
+   "for_each cannot be combined with multiple provider aliases at all, this is a fundamental Terraform limitation",
+   "The provider argument on a resource block must be a literal reference to a specific provider alias, known statically when the configuration is parsed — its value cannot depend on an expression evaluated dynamically (e.g. on each.value or a conditional operator); to choose a provider based on data, you need separate resource blocks (one for each provider alias) with corresponding for_each subsets",
+   "aws.euwest and aws.apeast are simply swapped in this code, so it's a logic error, not a syntax limitation",
+   "There is no error, the code is valid and will work as intended"
+  ],
+  "correct_index": 1,
+  "explanation": "Terraform requires that provider = <alias> on a resource block be a static literal (aws.euwest), not the result of evaluating an expression — this is a language limitation related to the fact that the provider graph is built before resource values are computed. For multi-region/multi-account deployment via for_each, in practice separate resource blocks are set up for each provider alias, each with its own filtered for_each subset, or separate modules are used with the provider explicitly passed at call time.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h34",
+  "topic": "Terraform",
+  "question": "An engineer wants to completely stop managing the aws_s3_bucket.legacy resource via Terraform, but NOT delete the actual bucket in real infrastructure (e.g. the bucket is now managed by another team/tool). They're considering two options: (1) terraform state rm aws_s3_bucket.legacy, (2) a removed { from = aws_s3_bucket.legacy, lifecycle { destroy = false } } block followed by removing the resource block from the code. What's the key difference for team collaboration?",
+  "options": [
+   "Both options are completely identical in effect and safety, there's no difference",
+   "terraform state rm is a one-off local operation that records nothing in the code itself: if another team member is unaware and doesn't remove the corresponding resource block, their next apply will try to recreate the 'lost' resource; the removed block, by contrast, is recorded in the .tf code itself and versioned via git — on the next apply by ANY team member, Terraform will correctly and reproducibly remove the resource from state without destroying it, with no risk of desync between different engineers' local states",
+   "The removed block physically deletes the resource from the cloud, while state rm only removes it from state",
+   "state rm can only be applied to resources without for_each/count, removed only to those with for_each/count"
+  ],
+  "correct_index": 1,
+  "explanation": "terraform state rm is an imperative one-off command whose effect isn't documented in the configuration and doesn't automatically reproduce for other team members. The removed block (Terraform 1.7+) is a declarative, git-versioned way to say 'this resource should no longer be managed by Terraform, but shouldn't actually be deleted' (destroy = false) — on the next apply by any engineer with the updated code, Terraform will safely remove the resource from state on its own, ensuring consistency across everyone working with this configuration.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h35",
+  "topic": "Terraform",
+  "question": "In a CI/CD pipeline, a staging step failed on one resource out of 40. To quickly unblock the pipeline, an engineer runs terraform apply -target=aws_instance.broken directly in production, and a day later forgets to run a full terraform apply without -target. What risk materializes in this scenario?",
+  "options": [
+   "No risk at all — -target guarantees the rest of the state remains fully in sync with the configuration",
+   "The state can end up partially unsynchronized: -target applies changes only to the specified resource and its dependencies, but other changes accumulated in the configuration (unrelated to that resource) are not applied — if they're forgotten (as in this scenario), the real infrastructure and code diverge, and this divergence goes unnoticed until someone runs a regular apply and suddenly sees a large diff",
+   "-target automatically creates a reminder task in HCP Terraform about the need for a full apply",
+   "The problem resolves itself on the next terraform plan without -target — Terraform will automatically apply the missed changes"
+  ],
+  "correct_index": 1,
+  "explanation": "-target is officially described by HashiCorp as a tool for exceptional situations (troubleshooting), not for regular use, precisely because of this risk: it creates a partial, inconsistent snapshot of state relative to the full configuration. terraform plan without -target won't automatically 'merge' the missed changes into this process — a regular apply will only correctly show them as a diff (which would have happened normally anyway), but until that moment, production can remain indefinitely in a state where part of the desired changes hasn't been applied, without the team knowing.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h36",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nvariable \"cidr\" {\n  type = string\n}\n\nlocals {\n  octets   = split(\".\", var.cidr)\n  is_valid = can(regex(\"^([0-9]{1,3}\\\\.){3}[0-9]{1,3}/[0-9]{1,2}$\", var.cidr)) && alltrue([for o in local.octets[0] != null ? [tonumber(split(\"/\", local.octets[3])[0])] : [] : true])\n}\n```\nAn engineer reports that this expression fails with a parsing/type error even before being applied to real data. What is the fundamental problem with this code, unrelated to the CIDR-validation logic itself?",
+  "options": [
+   "can() cannot be used inside alltrue() — these two functions are mutually incompatible",
+   "The for-expression syntax in the assignment to local.is_valid is malformed — the triple conditional `? [...] : [] : true` inside a for-list is not a valid HCL expression (a conditional operator returns exactly one value and cannot contain a second `:` for a separate 'overall' result); the code will not compile regardless of the value of var.cidr",
+   "regex() cannot be used together with split() in the same local block",
+   "The problem is that split(\".\", var.cidr) will return an error if the string contains a '/' character"
+  ],
+  "correct_index": 1,
+  "explanation": "This is an HCL syntax error: the ternary operator `condition ? true_val : false_val` returns exactly one value per evaluation; a construct like `... ? [...] : [] : true` is not valid syntax (the extra `: true` has nothing to attach to) and causes a parse error at the terraform validate stage, before any attempt to evaluate real values. This illustrates an important skill: distinguishing an HCL syntax error from a logic/type error inside an otherwise correctly parsed expression.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h37",
+  "topic": "Terraform",
+  "question": "Given the templatefile template:\n```\n# init.sh.tpl\n#!/bin/bash\n%{ if enable_monitoring ~}\nsystemctl enable monitoring-agent\n%{ else ~}\necho \"monitoring disabled\"\n%{ endif ~}\n```\nand the call:\n```\nlocals {\n  script = templatefile(\"${path.module}/init.sh.tpl\", {\n    enable_monitoring = var.env == \"prod\"\n  })\n}\n```\nIf the enable_monitoring variable is NOT passed to the template at all (removing this line from the map), what happens during terraform plan?",
+  "options": [
+   "templatefile() silently substitutes false as a default for any template variable not explicitly declared in the call",
+   "templatefile() fails with an error: unlike regular Terraform variables (variable), variables INSIDE a templatefile() template have no default — EVERY name used in the template (including inside %{ if ... }) must be explicitly passed in the second argument map, otherwise you get a 'vars map does not contain key' error",
+   "The %{ if ... } directive is simply skipped entirely in this case, including the else branch",
+   "The error only occurs at apply time, not plan, because the file is read lazily"
+  ],
+  "correct_index": 1,
+  "explanation": "templatefile(path, vars) requires that EVERY variable mentioned in the template (including those used only inside %{ if }/%{ for } directives) be present in the vars map passed to it — no defaults are provided. The absence of any expected name causes a runtime evaluation error ('vars map does not contain key \"...\"'), not a silent substitution of false/null.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h38",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nresource \"terraform_data\" \"db_migration\" {\n  input = filemd5(\"${path.module}/migrations/schema.sql\")\n\n  provisioner \"local-exec\" {\n    command = \"psql -f migrations/schema.sql\"\n  }\n\n  lifecycle {\n    replace_triggered_by = [terraform_data.db_migration]\n  }\n}\n```\nWhat is wrong with this code (pay attention to lifecycle.replace_triggered_by)?",
+  "options": [
+   "replace_triggered_by only works with resources other than terraform_data — using it with terraform_data itself is forbidden at the provider level",
+   "The code contains a self-reference: replace_triggered_by on terraform_data.db_migration points to... itself (terraform_data.db_migration) — this is a logical error (a potential dependency cycle/pointless construct); the recreate-on-input-change mechanism for terraform_data is already built in by default (a change to input already triggers recreation on its own), so replace_triggered_by here is simply redundant and, more importantly, self-referential",
+   "provisioner \"local-exec\" cannot be used inside terraform_data, only inside null_resource",
+   "filemd5() cannot be used as the input for terraform_data, because input must be a base64-encoded string"
+  ],
+  "correct_index": 1,
+  "explanation": "The input attribute of terraform_data is itself already tracked as a regular resource attribute — a change in its value (here: a change in the migration file's md5 hash) by itself already causes the resource to be recreated (and, consequently, the provisioner to rerun). Specifying replace_triggered_by = [terraform_data.db_migration] (a reference to itself) is redundant and potentially creates a logically incorrect self-dependency — replace_triggered_by is meant to track changes in OTHER resources/attributes that don't otherwise affect this resource's own diff.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h39",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\ndata \"external\" \"lookup\" {\n  program = [\"python3\", \"${path.module}/lookup.py\"]\n  query = {\n    env = var.environment\n  }\n}\n```\nand lookup.py prints to stdout:\n```\n{\"region\": \"eu-west-1\", \"replicas\": 3}\n```\nWhat happens during terraform plan, and which part of this output violates the external data source's contract?",
+  "options": [
+   "Everything works fine, and data.external.lookup.result.replicas is available as the number 3",
+   "Terraform fails with a result-parsing error: the external contract requires that ALL values in the returned JSON object be STRINGS (a flat map string→string) — here replicas is passed as a number (3) instead of a string (\"3\"), which violates the expected format",
+   "There is no error, but result.replicas is automatically coerced to the string \"3\" with no user intervention",
+   "The error is caused by the query field — external does not support passing input data to the program"
+  ],
+  "correct_index": 1,
+  "explanation": "The external data source protocol strictly requires that the result the program prints to stdout be a JSON object with exclusively string values (map[string]string), with no nested objects, lists, numbers, or booleans — this is a constraint of the protocol itself, not something Terraform 'auto-converts'. The output {\"region\": \"eu-west-1\", \"replicas\": 3} (a number instead of the string \"3\") violates the contract and causes a result-parsing error on Terraform's side.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h40",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\ndata \"http\" \"internal_config\" {\n  url = \"http://169.254.169.254/latest/meta-data/iam/security-credentials/\"\n}\n```\nAside from the obvious lack of practical usefulness in this specific example, what category of risk generally applies to using the http data source with a dynamically constructed or untrusted URL inside a Terraform configuration executed in CI/CD?",
+  "options": [
+   "The http data source is completely safe, because Terraform always executes requests through an isolated sandboxed proxy",
+   "The request executes as the Terraform process (i.e. with the same network visibility and potential access as the CI/CD runner itself) at plan/apply time — if the URL is built from untrusted/user-controlled input, this opens a risk analogous to SSRF (Server-Side Request Forgery): the configuration could be used to send requests to internal endpoints (e.g. a cloud instance metadata service), potentially leaking secrets/credentials via response_body",
+   "The only problem is that data \"http\" doesn't support HTTPS, only HTTP",
+   "There is no risk, because response_body is always automatically masked as sensitive in the plan output"
+  ],
+  "correct_index": 1,
+  "explanation": "Because data \"http\" performs a real network request as the process running terraform plan/apply (i.e. with the network access and permissions of that environment, e.g. a CI runner inside a VPC), an untrusted/dynamic URL creates a classic SSRF vector: the configuration could potentially be manipulated into requesting internal services (including cloud metadata endpoints like 169.254.169.254, which can return temporary credentials). By default, response_body is NOT automatically masked as sensitive unless explicitly marked as such.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h41",
+  "topic": "Terraform",
+  "question": "A CI pipeline uses:\n```\nterraform plan -json > plan.json\njq '.[] | select(.type==\"resource_drift\")' plan.json\n```\nWhich of the following is NOT a correct consequence of using the -json flag?",
+  "options": [
+   "The output becomes a stream of JSON objects (one object per line, JSON Lines), suitable for programmatic parsing by tools like jq, instead of human-readable text",
+   "-json outputs a machine-readable event log (init/plan messages, resource changes, drift, etc.) line by line — this is the official, supported way to integrate external tools with Terraform's output, as opposed to parsing the regular text output, whose format is not guaranteed to be stable across versions",
+   "Using -json automatically disables saving the plan via -out — the plan can no longer be saved for a subsequent apply",
+   "The regular human-readable colored output (used by default) is completely suppressed in this case"
+  ],
+  "correct_index": 2,
+  "explanation": "-json and -out are two independent, complementary flags: you can (and often should) use terraform plan -out=tfplan -json > plan.json simultaneously to get both a saved binary plan for apply and its machine-readable JSON representation for CI analysis. The claim that -json disables -out is false — they don't conflict.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h42",
+  "topic": "Terraform",
+  "question": "An engineer sets environment variables before a problematic terraform apply:\n```\nexport TF_LOG=TRACE\nexport TF_LOG_PATH=./terraform-debug.log\nterraform apply\n```\nWhich of the following correctly describes the behavior and purpose of this combination?",
+  "options": [
+   "TF_LOG=TRACE enables the most detailed logging level available (TRACE > DEBUG > INFO > WARN > ERROR, from most to least detailed), and TF_LOG_PATH redirects these logs to the specified file instead of standard output — useful to avoid cluttering the regular apply output while still preserving full diagnostic information for later analysis (e.g. when contacting HashiCorp support)",
+   "TF_LOG=TRACE only affects the output of the Terraform CLI itself and does not affect logs from the providers being used",
+   "TF_LOG_PATH is required for TF_LOG to work — without it, the TF_LOG variable is completely ignored",
+   "TRACE is the only logging level available in Terraform; there are no intermediate levels such as DEBUG, INFO, or WARN"
+  ],
+  "correct_index": 0,
+  "explanation": "TF_LOG sets Terraform's log verbosity level (available levels, from most to least detailed: TRACE, DEBUG, INFO, WARN, ERROR) — this covers both the CLI's own logs and logs generated by providers (plugins) via the same RPC mechanism. TF_LOG_PATH specifies a file to write these logs to, instead of mixing them into the command's regular terminal output — the two are independent (TF_LOG_PATH without TF_LOG has no effect, but TF_LOG alone works fine without TF_LOG_PATH, simply writing logs to stderr).",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h43",
+  "topic": "Terraform",
+  "question": "An engineer suspects that the real state of several cloud resources has drifted from Terraform's state (someone made manual changes via the console), and wants to update the state to match reality ONLY, without applying any changes to the actual infrastructure and without showing any proposed infrastructure changes. Which command solves exactly this problem?",
+  "options": [
+   "terraform apply -refresh-only — a special plan/apply mode that updates ONLY the data in state to match the resources' real state at the provider (analogous to the deprecated terraform refresh), showing the diff between state and reality, but neither proposing nor applying any changes to the actual infrastructure based on the .tf code",
+   "terraform plan -destroy — shows a full-destroy plan without applying it",
+   "terraform apply -auto-approve — applies literally any changes, including infrastructure changes, without asking for confirmation",
+   "terraform validate — checks only the code's syntax, and does not interact with real infrastructure at all"
+  ],
+  "correct_index": 0,
+  "explanation": "terraform plan -refresh-only / terraform apply -refresh-only is a mode introduced as a safer, more explicit alternative to the deprecated standalone terraform refresh command. It updates only the state records to match the provider's actual reported state (detecting 'drift'), but does NOT compute or apply a diff between state and the .tf configuration — meaning the actual infrastructure is unchanged, only Terraform's 'knowledge' of its current state is updated.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h44",
+  "topic": "Terraform",
+  "question": "An engineer moves a resource out of the root module into a new nested module (changing only the .tf code structure, without changing the resource itself in the real infrastructure). After running terraform plan, Terraform proposes destroying the old resource and creating a new one (at the new address inside module). How can this destructive plan be avoided while preserving the mapping to the existing infrastructure?",
+  "options": [
+   "Run terraform state mv aws_instance.web module.app.aws_instance.web — this command moves the resource's record within the state from one address to another WITHOUT interacting with the real provider, syncing the state with the new code structure, after which plan will see a 'match' and won't propose destroy+create",
+   "Simply re-run terraform apply — Terraform will figure out on its own that it's the same resource by matching attributes, and won't recreate it",
+   "Use terraform import for the new address module.app.aws_instance.web without touching the old state record — both records will coexist peacefully",
+   "Add lifecycle { prevent_destroy = true } — this will force Terraform to automatically 'move' the resource to the new address instead of destroying it"
+  ],
+  "correct_index": 0,
+  "explanation": "terraform state mv <old_address> <new_address> is the command designed exactly for this scenario (refactoring code structure without changing the real infrastructure): it moves the resource's record in the state file to a new address that matches the resource block's new location in code (including moving into/out of a module), without making any calls to the provider's API. After that, on the next plan, Terraform sees that the resource at the new address is already 'known' to the state with the right attributes, and doesn't propose recreation.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h45",
+  "topic": "Terraform",
+  "question": "An organization on HCP Terraform has a Run Tasks integration attached to several workspaces, calling an external security-scanning service at the post-plan stage with enforcement level \"mandatory\". The external service detects a critical vulnerability in one of the planned security group rules. What happens to this run?",
+  "options": [
+   "The Run Task only sends a Slack notification but has no effect on whether apply can proceed — Run Tasks are purely an informational mechanism with no enforcement",
+   "With enforcement level \"mandatory\", a failed result from the external Run Task service BLOCKS the run from proceeding to the apply stage (similar to a hard-mandatory Sentinel policy) — the run is halted, requiring either a fix to the configuration or (if the service allows it) explicit intervention by someone with sufficient permissions; with enforcement level \"advisory\", the same failed result would only be a warning that doesn't block apply",
+   "Run Tasks can only run at the pre-plan stage, so the described scenario (post-plan) is inherently impossible",
+   "Run Tasks are a feature available only in open-source Terraform CLI, not in HCP Terraform"
+  ],
+  "correct_index": 1,
+  "explanation": "Run Tasks are an HCP Terraform mechanism for integrating external services (security scanning, compliance checks, etc.) at specific run stages (pre-plan, post-plan, pre-apply — depending on the subscription plan/version). Each integration is configured with an enforcement level: \"advisory\" (a failed result only warns, apply proceeds) or \"mandatory\" (a failed result blocks progress to apply, requiring the issue to be resolved). This allows third-party security/compliance gates to be embedded directly into the run lifecycle without rewriting the pipeline itself.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h46",
+  "topic": "Terraform",
+  "question": "A company uses HCP Terraform, but its infrastructure (private VPC resources not reachable from the internet) requires that the actual execution of terraform plan/apply happen from inside the corporate network, rather than on HashiCorp-managed cloud execution workers. Which HCP Terraform feature solves exactly this problem?",
+  "options": [
+   "Simply switching the workspace to CLI-driven mode is by itself sufficient to gain access to private resources",
+   "HCP Terraform Agents (Agent Pools) — a self-hosted, lightweight agent deployed by engineers inside the private network/perimeter; a run for a workspace tied to such an agent pool is executed specifically on this self-managed agent (rather than on HashiCorp's cloud execution workers), while still preserving centralized management of state/run/UI through HCP Terraform itself",
+   "This requires fully abandoning HCP Terraform and reverting to a plain CLI-driven workflow with a local backend",
+   "Sentinel policy sets — allow executing arbitrary code inside the private network as part of a policy check"
+  ],
+  "correct_index": 1,
+  "explanation": "HCP Terraform Agents (organized into Agent Pools) is a mechanism for cases where infrastructure managed by Terraform sits in an isolated/private network unreachable directly from HashiCorp's cloud execution workers. The company deploys its own lightweight agent process inside its network (or a VPN-accessible perimeter); a run for the corresponding workspace is actually executed by this agent, while centralized management (state, run history, policy, UI) remains in HCP Terraform itself — a hybrid of remote management plus local (within a controlled network) execution.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h47",
+  "topic": "Terraform",
+  "question": "A workspace in HCP Terraform has Cost Estimation enabled, and additionally has a Sentinel policy configured that reads cost estimation data via the tfrun import and blocks apply if the projected monthly cost increase exceeds $500, with enforcement level \"hard-mandatory\". An engineer runs a plan that increases the projected cost by $800. Can anyone override this block, unlike an equivalent soft-mandatory policy?",
+  "options": [
+   "Yes, an organization owner can override any policy, including hard-mandatory, by providing a justification in the UI",
+   "No — this is the key difference between hard-mandatory and soft-mandatory: a hard-mandatory policy CANNOT be overridden by anyone, regardless of role or permissions in the organization; the run is unconditionally blocked until either the configuration itself or the policy itself is changed to satisfy the condition",
+   "Yes, but only if the user has a separate \"cost-override\" permission specifically meant for policies tied to cost estimation",
+   "Hard-mandatory policies only apply to Sentinel security checks, not to checks based on cost estimation — for the latter, only advisory applies"
+  ],
+  "correct_index": 1,
+  "explanation": "The hard-mandatory enforcement level is the strictest of the three (advisory / soft-mandatory / hard-mandatory): unlike soft-mandatory, where a user with override permission can knowingly proceed with apply despite a violation (which is recorded in the audit log), hard-mandatory provides no override mechanism for anyone, including organization owners. The only way to pass the check is to change the configuration (or, with sufficient permissions, the policy itself) so that the run actually satisfies the condition.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h48",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nlocals {\n  raw = \"eyJyZWdpb24iOiAiZXUtd2VzdC0xIn0=\"\n  decoded_map = jsondecode(base64decode(local.raw))\n}\n```\nIf local.raw is in fact NOT a valid base64 string (e.g. it contains characters outside the base64 alphabet), at what stage and how will this be discovered?",
+  "options": [
+   "The error will only be discovered at the cloud provider, at the moment of a real API call, after apply",
+   "base64decode() will throw an expression-evaluation error already at the plan stage (when attempting to evaluate local.decoded_map) — Terraform will not defer this check until apply, because building the plan requires it to evaluate the values of locals that depend only on static data",
+   "No error will occur at all — base64decode() simply returns null on invalid input, which then makes jsondecode(null) equal to {}",
+   "base64decode() automatically 'fixes' invalid characters by dropping them and decodes the remainder of the string"
+  ],
+  "correct_index": 1,
+  "explanation": "base64decode(string) performs strict validation of the input string against the base64 alphabet; if the string is invalid, the function fails with an expression-evaluation error. Since in this example local.raw is a static literal value (not dependent on resources created during apply), Terraform must evaluate local.decoded_map already at the plan stage to build the graph/plan — accordingly, the error surfaces immediately at plan, rather than being deferred until apply.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h49",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nvariable \"team_configs\" {\n  type = map(object({\n    instance_count = number\n    instance_type  = string\n  }))\n}\n\nresource \"aws_instance\" \"app\" {\n  for_each      = var.team_configs\n  count         = each.value.instance_count\n  ami           = \"ami-12345\"\n  instance_type = each.value.instance_type\n}\n```\nWhat happens when running terraform validate on this configuration?",
+  "options": [
+   "Everything is fine: for_each creates a resource instance for each map key, and count additionally multiplies it by instance_count",
+   "A validation error: for_each and count are mutually exclusive meta-arguments — they CANNOT be used together on the same resource block (unlike nested blocks inside a resource, where a similar combination is sometimes possible); Terraform fails with an explicit error already at the validate/plan stage, requiring one of the two mechanisms to be chosen",
+   "count is simply ignored, leaving only the effect of for_each",
+   "The error only occurs at the apply stage, since validate does not check meta-argument compatibility"
+  ],
+  "correct_index": 1,
+  "explanation": "count and for_each are mutually exclusive meta-arguments at the level of the same resource/module block — using both simultaneously is forbidden, and Terraform reports this with an explicit error already at the validate stage (before plan/apply), rather than allowing some 'combined' multiplication of resources. To achieve a similar effect (a variable number of instances per map entry), one would need to, for example, first 'flatten' the map into a flat list of (team, index) pairs via flatten()+a for-expression and use only for_each over that flat set.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h50",
+  "topic": "Terraform",
+  "question": "An engineer wants to use a provider-defined function from the hashicorp/aws provider (available starting with Terraform 1.8, for providers built on the new Plugin Framework):\n```\nlocals {\n  parsed = provider::aws::arn_parse(var.role_arn)\n}\n```\nWhen running terraform init, the configuration fails with an error like 'Function not found in provider aws'. Which of the following is the MOST likely cause, given that required_providers pins a specific version of the aws provider?",
+  "options": [
+   "provider::aws::arn_parse() is a typo — all provider-defined functions must start with the fn_ prefix, rather than being an arbitrary name",
+   "required_providers pins a version of the aws provider OLDER than the one in which the specific arn_parse function was added (or the provider doesn't support this function at all/is built on the legacy SDK rather than the Plugin Framework) — provider-defined functions appear in specific provider versions as part of its releases, and using the function requires a provider version in which it is implemented; the provider's changelog should be checked and the minimum version in required_providers raised",
+   "provider::aws::arn_parse() cannot be called from a local block, only directly as a resource argument",
+   "The error means the Terraform CLI itself is too new — provider-defined functions only work with specifically deprecated CLI versions"
+  ],
+  "correct_index": 1,
+  "explanation": "Provider-defined functions are shipped by the provider itself and appear in specific releases of its version (just like new resources/data sources) — if the required function was added, say, in aws provider version 5.40, and required_providers constrains the version to an earlier range, Terraform won't find this function in the actually-used (older) provider version. The fix is to check the provider's changelog for the version that added the needed function and update the version constraint in required_providers accordingly; the call itself via local is entirely valid — the syntax provider::<name>::<func>(...) is not restricted in where it can be used within HCL expressions.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h51",
+  "topic": "Terraform",
+  "question": "Starting with Terraform 1.10 and AWS provider 5.x with support for S3-native locking, you can configure a backend without DynamoDB:\n```\nterraform {\n  backend \"s3\" {\n    bucket       = \"my-tf-state\"\n    key          = \"prod/terraform.tfstate\"\n    region       = \"eu-west-1\"\n    use_lockfile = true\n  }\n}\n```\nWhat does the use_lockfile = true attribute provide, and why does it eliminate the need for a separate DynamoDB table for locking?",
+  "options": [
+   "use_lockfile enables locking via a separate .lock file on the local disk of the machine running terraform — it has nothing to do with the remote backend at all",
+   "use_lockfile uses conditional writes (analogous to S3 object locking via ETag/If-None-Match) directly in the S3 bucket itself to implement a distributed lock, eliminating the need for a separate DynamoDB service, which was previously the only supported state-locking mechanism for the S3 backend",
+   "use_lockfile disables locking entirely, allowing concurrent applies with no blocking whatsoever",
+   "The use_lockfile attribute only relates to the provider lock file (.terraform.lock.hcl), not to state locking"
+  ],
+  "correct_index": 1,
+  "explanation": "Before S3-native locking existed, the only supported way to implement a distributed lock for the S3 backend was a separate DynamoDB table (the dynamodb_table setting in the backend configuration). use_lockfile = true uses S3's own conditional write operations (conditional PutObject support) to implement the same lock mechanism without an external dependency on DynamoDB, simplifying the backend infrastructure.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h52",
+  "topic": "Terraform",
+  "question": "Given a backend configuration authenticated via OIDC (without static AWS access keys):\n```\nterraform {\n  backend \"s3\" {\n    bucket = \"my-tf-state\"\n    key    = \"prod/terraform.tfstate\"\n    region = \"eu-west-1\"\n\n    assume_role_with_web_identity {\n      role_arn                = \"arn:aws:iam::123456789012:role/terraform-ci\"\n      web_identity_token_file = \"/tmp/token\"\n    }\n  }\n}\n```\nWhat is the fundamental difference between assume_role_with_web_identity and classic assume_role (based on static IAM credentials)?",
+  "options": [
+   "assume_role_with_web_identity is functionally identical to assume_role, just with a different syntax — there is no real difference",
+   "assume_role_with_web_identity lets a CI system (e.g. the GitHub Actions/GitLab CI OIDC provider) exchange a SHORT-LIVED, cryptographically signed JWT token (which requires no pre-stored static AWS keys in CI secrets) for temporary AWS credentials via AWS STS — eliminating the need to store long-lived access key/secret key pairs in CI/CD variables at all",
+   "assume_role_with_web_identity only works for authentication within AWS itself (EC2/ECS), not for external CI systems",
+   "web_identity_token_file must contain a static access key in JSON format, not a JWT"
+  ],
+  "correct_index": 1,
+  "explanation": "assume_role_with_web_identity implements OIDC federation: the CI system (e.g. GitHub Actions) presents a short-lived OIDC token, which AWS STS validates against the configured identity provider and, if the role's trust policy allows it, issues temporary credentials. This eliminates the need to store long-lived static AWS access keys/secrets in CI secrets, reducing the risk of their leakage — a fundamental difference from classic assume_role, which is typically invoked with already-existing static credentials of a base identity.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h53",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\ndata \"terraform_remote_state\" \"network\" {\n  backend = \"s3\"\n\n  config = {\n    bucket = \"network-team-state\"\n    key    = \"prod/network/terraform.tfstate\"\n    region = \"eu-west-1\"\n    role_arn = \"arn:aws:iam::999999999999:role/cross-account-reader\"\n  }\n}\n```\nThis configuration reaches into state OWNED BY ANOTHER AWS account (999999999999) via role_arn. What key limitation of data \"terraform_remote_state\" is important to understand in the context of cross-team usage?",
+  "options": [
+   "terraform_remote_state automatically filters out sensitive attributes (sensitive = true) from another project's state — only non-secret outputs will be accessible",
+   "terraform_remote_state reads the ENTIRE state as a whole (all outputs, with no exclusions) — if the calling module shouldn't have access to specific outputs, the only way to restrict access is to not grant read access to the state object at all via IAM/ACL on the backend itself; the terraform_remote_state mechanism itself does not support selective access to individual outputs at the Terraform level",
+   "The terraform_remote_state data source requires that the reading and owning projects use an identical version of the Terraform CLI",
+   "role_arn inside config is only supported for the \"remote\" backend type (HCP Terraform), not for \"s3\""
+  ],
+  "correct_index": 1,
+  "explanation": "data.terraform_remote_state reads ALL outputs in their entirety from the given state — Terraform has no built-in mechanism for 'selective' visibility of specific outputs for specific consumers. If the owning team wants to expose only part of the data, the recommended approach is usually to publish the needed values through a separate, purpose-built mechanism (e.g. SSM Parameter Store/Secrets Manager with granular permissions), rather than sharing access to the whole terraform_remote_state directly.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h54",
+  "topic": "Terraform",
+  "question": "Given a test snippet using the `terraform test` framework (Terraform 1.6+):\n```\n# tests/main.tftest.hcl\nmock_provider \"aws\" {\n  mock_resource \"aws_instance\" {\n    defaults = {\n      id = \"i-mockedid12345\"\n    }\n  }\n}\n\nrun \"creates_instance\" {\n  command = plan\n\n  assert {\n    condition     = aws_instance.web.instance_type == \"t3.micro\"\n    error_message = \"Wrong instance type\"\n  }\n}\n```\nWhat is mock_provider used for in this test, and how does it affect the need for real AWS credentials when running terraform test?",
+  "options": [
+   "mock_provider replaces a REAL provider call with a simulation (mock) that returns predefined default values for this provider's resources — allowing tests to run WITHOUT real cloud credentials and without creating real infrastructure, which is particularly useful for command = plan tests that check configuration logic rather than actual cloud behavior",
+   "mock_provider is only used for command = apply tests and is not supported for command = plan",
+   "mock_provider is a deprecated name for test_provider, kept for backward compatibility and not recommended for use",
+   "mock_provider still requires real AWS credentials, since it only logs real calls without altering their behavior"
+  ],
+  "correct_index": 0,
+  "explanation": "mock_provider (Terraform 1.7+) lets terraform test tests run against a SIMULATED provider, without real calls to the cloud API and without requiring real credentials — mock_resource inside it sets default values for a specific resource type's attributes. This makes tests fast, cheap (they don't create real infrastructure), and suitable for CI without secrets, particularly for logic checks (conditional expressions, count/for_each, locals) via command = plan.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h55",
+  "topic": "Terraform",
+  "question": "Given a test snippet:\n```\nrun \"invalid_environment\" {\n  command = plan\n\n  variables {\n    environment = \"invalid-value\"\n  }\n\n  expect_failures = [\n    var.environment,\n  ]\n}\n```\nWhat does the expect_failures attribute do in this run block, and what happens if the variable validation for environment does NOT fail with this value?",
+  "options": [
+   "expect_failures makes Terraform IGNORE any validation errors, always treating the run as successful regardless of the outcome",
+   "expect_failures explicitly declares an EXPECTATION that evaluating the given expression (var.environment) WILL FAIL WITH AN ERROR (e.g. fail variable validation) — if the evaluation does NOT fail (validation unexpectedly passes), the TEST ITSELF is considered FAILED, since the expected error did not occur; this allows writing negative test cases that specifically verify the correctness of validation rules",
+   "expect_failures only applies to provider errors during apply, not to variable validation",
+   "expect_failures requires a separate mock_provider block, otherwise it is ignored"
+  ],
+  "correct_index": 1,
+  "explanation": "expect_failures = [reference_to_checked_object] is a mechanism for writing NEGATIVE tests: a run is considered successful if the given expression truly failed with an error (e.g. failed variable validation or a lifecycle precondition). If the expected error did NOT occur (validation unexpectedly 'let through' an invalid value), the test-run itself is considered failed, signaling a regression in the validation rules.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h56",
+  "topic": "Terraform",
+  "question": "Given a test snippet:\n```\nrun \"setup\" {\n  command = apply\n  module {\n    source = \"./tests/setup\"\n  }\n}\n\nrun \"main_test\" {\n  command = plan\n\n  variables {\n    vpc_id = run.setup.vpc_id\n  }\n}\n```\nHow can run blocks in terraform test reference the results of OTHER run blocks (here: main_test uses run.setup.vpc_id)?",
+  "options": [
+   "This is impossible — every run block is fully isolated and cannot use outputs from other run blocks",
+   "run blocks execute in declaration order within the file, and the results (module outputs) of an earlier run are available to later ones via the syntax run.<run_name>.<output> — a common pattern: an initial run with command=apply creates helper infrastructure (e.g. via a dedicated test module { source = ... }), and subsequent runs use its outputs as input variables for the main test",
+   "References between run blocks only work in one direction — from the last run to the first, not the other way around",
+   "run.<name>.<output> only works if both run blocks use command = plan, but not apply"
+  ],
+  "correct_index": 1,
+  "explanation": "run blocks within a single .tftest.hcl file execute sequentially, and the syntax run.<run_name>.<output_name> lets you reference outputs obtained from an EARLIER run — this allows building multi-step test scenarios: for example, a separate setup run (often via its own helper test module { source = ... }) spins up needed prerequisite infrastructure, and a subsequent run uses its results as input variables to test the main module.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h57",
+  "topic": "Terraform",
+  "question": "An organization on HCP Terraform has configured No-Code Provisioning for the 'standard-vpc' module, allowing business users to run it themselves without writing HCL code. Which of the following is an INCORRECT description of the No-Code Modules mechanism?",
+  "options": [
+   "A No-Code module must be explicitly published to the organization's private registry and marked as available for No-Code Provisioning by an administrator",
+   "A user without Terraform skills can create a new workspace 'from' a No-Code module via the UI, providing variable values through a web form generated from the module's variable blocks, without needing to write the .tf module-call code themselves",
+   "No-Code modules completely eliminate the need for a state file — resources created through them are not tracked by Terraform state at all",
+   "Changes (upgrades) to a No-Code module's version for an existing workspace can be proposed by an administrator and applied by the user through the same web form, without manually editing code"
+  ],
+  "correct_index": 2,
+  "explanation": "No-Code Provisioning is a UI/UX layer ON TOP OF the regular workspace/module/state mechanism of HCP Terraform: under the hood, a full-fledged workspace with regular Terraform state is still created — only the calling code (a module block with variables) is generated automatically based on values entered by the user in a web form. State is tracked exactly the same way as for any other workspace — the claim of its absence is incorrect.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h58",
+  "topic": "Terraform",
+  "question": "An HCP Terraform organization has a Sentinel policy set configured with a policy that reads the plan via the tfplan/v2 import and checks that all aws_s3_bucket resources have server_side_encryption_configuration. This policy is applied with enforcement level \"advisory\", and a separate cost estimation policy is enabled with level \"hard-mandatory\". A plan violates BOTH policies at once. What happens to the run?",
+  "options": [
+   "The run will be blocked, because at least ONE of the applied policies — cost estimation — is hard-mandatory, regardless of the enforcement level of the other policies in the same policy set — each policy is evaluated according to its OWN enforcement level; the advisory policy (S3 encryption) failing only adds a warning, while the hard-mandatory policy (cost) failing unconditionally blocks apply",
+   "The run will proceed with no restrictions at all, because at least one of the policies is advisory, which 'softens' the check down to a warning for ALL policies in the set",
+   "The run will only be blocked if BOTH policies are hard-mandatory at the same time — with a mixed set of enforcement levels, apply is always allowed",
+   "Sentinel does not support applying multiple policies with DIFFERENT enforcement levels within the same policy set — this is a configuration error"
+  ],
+  "correct_index": 0,
+  "explanation": "Each Sentinel policy in a policy set is evaluated INDEPENDENTLY according to its OWN enforcement level (advisory / soft-mandatory / hard-mandatory) — they do not 'mix' or affect one another. Failing the advisory policy (S3 encryption) only adds a warning, without blocking the run, while failing the hard-mandatory policy (cost estimation) unconditionally blocks progression to apply, regardless of the outcome of other policies in the same set.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h59",
+  "topic": "Terraform",
+  "question": "Given code with multiple import blocks using for_each over data from an external source:\n```\nlocals {\n  existing_buckets = toset([\"logs-bucket\", \"backup-bucket\", \"assets-bucket\"])\n}\n\nimport {\n  for_each = local.existing_buckets\n  to       = aws_s3_bucket.buckets[each.value]\n  id       = each.value\n}\n\nresource \"aws_s3_bucket\" \"buckets\" {\n  for_each = local.existing_buckets\n  bucket   = each.value\n}\n```\nWhat happens if the REAL bucket named \"assets-bucket\" doesn't actually exist in the AWS account at the time of terraform plan?",
+  "options": [
+   "Terraform silently skips this particular import and creates \"assets-bucket\" as a regular new resource, proceeding without errors",
+   "terraform plan fails with an error specifically for that import block iteration (each.value == \"assets-bucket\") — Terraform must find a real resource with the given id at the provider for EVERY iteration of an import with for_each, and the absence of even one of them causes plan to fail for the whole operation, without automatically preserving the successful imports of other for_each branches",
+   "The error only occurs at the apply stage, since import with for_each is validated lazily",
+   "import with for_each isn't supported at all in Terraform — this is a syntax error"
+  ],
+  "correct_index": 1,
+  "explanation": "Each iteration of an import block with for_each essentially represents a separate import operation for a specific id at the provider. If the provider reports that no resource with that id exists, Terraform fails plan specifically for that iteration — when importing multiple resources at once, it's important to first confirm that ALL ids from the source (local.existing_buckets) correspond to genuinely existing resources, otherwise the whole plan will be aborted with an error.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h60",
+  "topic": "Terraform",
+  "question": "Given code with several moved blocks describing a CHAIN of renames of the same resource across multiple releases:\n```\nmoved {\n  from = aws_instance.server\n  to   = aws_instance.web_server\n}\n\nmoved {\n  from = aws_instance.web_server\n  to   = module.compute.aws_instance.web_server\n}\n```\nIf a user applies the UPDATED code straight from a state where the resource in state is still named at the original aws_instance.server (i.e. they 'skipped' an intermediate release with aws_instance.web_server), how does Terraform handle this situation?",
+  "options": [
+   "Terraform will only process the FIRST moved block in file order and fail on the second, since aws_instance.web_server doesn't exist yet in state",
+   "Terraform can TRACE a chain of multiple moved blocks transitively: if the resource in state is at the earliest from address in the chain, Terraform will apply all the linked moved blocks in sequence and correctly 'advance' the resource to its final, current address (module.compute.aws_instance.web_server) in a single run — without needing to apply the intermediate releases one at a time",
+   "The user MUST manually run two separate terraform apply operations — one per moved block — otherwise the chain won't work",
+   "Chains of moved blocks longer than one aren't supported — you'd need to manually delete the intermediate moved and keep only the last"
+  ],
+  "correct_index": 1,
+  "explanation": "Terraform correctly handles CHAINS of moved blocks: if the resource in state is at the earliest address of the chain (aws_instance.server), Terraform will transitively apply all linked moved blocks in a single plan/apply run and correctly associate the resource with its final, current address. This lets users who skipped several intermediate releases safely 'catch up' to the current code structure with a single update, without going through each intermediate step manually.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h61",
+  "topic": "Terraform",
+  "question": "Given code where a write-only argument is used alongside a versioning companion attribute:\n```\nresource \"random_password\" \"db\" {\n  length = 20\n}\n\nresource \"aws_db_instance\" \"main\" {\n  # ...\n  password_wo         = random_password.db.result\n  password_wo_version = 1\n}\n```\nWhy do providers using write-only arguments (like password_wo) often introduce a PAIRED regular attribute like password_wo_version?",
+  "options": [
+   "password_wo_version determines how many TIMES the provider should retry writing the password on a network error",
+   "Since a write-only value is NEVER saved to state, Terraform has no way to determine from the attribute's own value whether it has changed between applies (a value-based diff is impossible, it's always 'unknown' in state) — the companion version attribute, being a REGULAR (persisted) attribute, serves as an explicit, state-visible trigger: a change to the version number signals to Terraform that the write-only value needs to be resubmitted to the provider on the next apply",
+   "password_wo_version determines the minimum provider version required to support write-only arguments",
+   "A version attribute is mandatory by HCL specification for any attribute with the _wo suffix, regardless of provider logic"
+  ],
+  "correct_index": 1,
+  "explanation": "Since write-only values are not persisted to state, Terraform physically cannot compare an 'old' and 'new' value to detect a change (unlike ordinary attributes). The 'version companion' pattern (a regular, persisted attribute like password_wo_version) solves this: the user explicitly increments version whenever the secret needs updating, and it is precisely the CHANGE to this regular attribute in state that triggers the update/resubmission of the write-only value to the provider.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h62",
+  "topic": "Terraform",
+  "question": "Given code combining an ephemeral resource with a regular (persisted) resource:\n```\nephemeral \"random_password\" \"temp\" {\n  length = 16\n}\n\nresource \"aws_db_instance\" \"main\" {\n  # ...\n  password_wo = ephemeral.random_password.temp.result\n}\n```\nWhy is it safe to pass an ephemeral value from random_password.temp into a write-only argument (password_wo), but NOT into a regular (persisted) resource attribute?",
+  "options": [
+   "Ephemeral values technically CAN be assigned to any attribute without restriction — the distinction between write-only and regular attributes doesn't matter here",
+   "A write-only argument, just like an ephemeral value, fundamentally does NOT persist to state — their 'non-persistence contracts' are compatible: on both sides, the value exists only within the current apply. Assigning an ephemeral value to a REGULAR attribute would violate the ephemeral guarantee ('never persist'), since a regular attribute MUST be saved to state — Terraform statically FORBIDS such an assignment as a graph validation error",
+   "This restriction exists purely for historical compatibility reasons and has nothing to do with state",
+   "Ephemeral values can only be assigned to output blocks, not to resource attributes at all, regardless of write-only status"
+  ],
+  "correct_index": 1,
+  "explanation": "Both write-only arguments and ephemeral resources/values share the same guarantee: the value is not saved to state between runs. Assigning an ephemeral value to a regular (persisted) resource attribute would violate this guarantee, since a regular attribute must be written to state for subsequent diffing — so Terraform statically checks the usage graph and forbids such an assignment as a configuration error. A write-only argument is the only type of attribute 'receiver' whose non-persistence contract is compatible with an ephemeral source.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h63",
+  "topic": "Terraform",
+  "question": "An HCP Terraform workspace has 'Auto-apply' enabled together with a VCS-driven workflow, and speculative plans are configured for Pull Requests. A developer opens a PR that changes .tf code. Which of the following CORRECTLY describes the system's behavior?",
+  "options": [
+   "The speculative plan for the PR will be automatically applied, since Auto-apply is enabled — simply opening the PR will by itself lead to real infrastructure changes",
+   "A speculative plan run for a PR (before merge, based on the proposed changes) can NEVER be applied by itself, regardless of the Auto-apply setting — it exists solely to preview changes in the context of code review; Auto-apply only takes effect for a 'regular' (non-speculative) run, which is created after the PR is MERGED into a tracked branch (e.g. main)",
+   "Auto-apply and speculative plan are mutually exclusive settings and cannot be enabled at the same time on one workspace",
+   "The speculative plan is only applied automatically if the PR has been approved by at least one reviewer on GitHub/GitLab"
+  ],
+  "correct_index": 1,
+  "explanation": "A speculative plan is a special type of run created for a PR/MR BEFORE it is merged, meant solely for displaying proposed changes directly in the code-review interface (e.g. as a GitHub comment/status check). It is mechanically prevented from ever transitioning to apply, regardless of Auto-apply. The Auto-apply setting only applies to REGULAR runs, created once changes are actually merged into the workspace's tracked branch.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h64",
+  "topic": "Terraform",
+  "question": "Given code checking an invariant across several related resources via a check block containing multiple assert blocks:\n```\ncheck \"instance_health\" {\n  assert {\n    condition     = aws_instance.web.instance_state == \"running\"\n    error_message = \"Instance is not running.\"\n  }\n\n  assert {\n    condition     = aws_lb_target_group_attachment.web.target_id == aws_instance.web.id\n    error_message = \"Instance not attached to target group.\"\n  }\n}\n```\nIf the FIRST assert fails and the second passes, how does Terraform handle and display the result of this check block?",
+  "options": [
+   "Terraform stops at the first failing assert and does NOT evaluate the second assert at all (short-circuit)",
+   "Terraform evaluates ALL assert blocks inside check independently of one another (without short-circuiting on the first failure) and shows a SEPARATE warning message for each failing assert (here — only for the first one, since the second passed); none of the failures inside check will halt apply/plan itself",
+   "The first assert's failure automatically counts as a failure of the WHOLE check block, WITHOUT an individual message — only one generic warning will be shown, without indicating which specific assert failed",
+   "check blocks with multiple assert blocks are not allowed — only one assert per check is permitted"
+  ],
+  "correct_index": 1,
+  "explanation": "A single check block may contain multiple assert blocks, and each is evaluated INDEPENDENTLY (without short-circuiting on the first failure) — Terraform shows a separate warning message for each failing assert, with its own error_message. This allows a single plan/apply run to surface ALL violated invariants at once, rather than only the first one. As with any check, a failing assert inside it does not halt apply — it's purely a diagnostic signal.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h65",
+  "topic": "Terraform",
+  "question": "An HCP Terraform workspace has Drift Detection enabled (a periodic background check that the state matches real infrastructure, independent of normal runs). Drift is detected: a security group rule was manually changed in the AWS console. Which of the following correctly describes the system's default reaction?",
+  "options": [
+   "Drift Detection automatically triggers an apply to restore the infrastructure to the state described in the .tf code, without user involvement",
+   "Drift Detection periodically runs a refresh-only-like plan in the background and, upon detecting a discrepancy, ONLY notifies (a drift UI indicator on the workspace, optionally integrated with notification channels) but does NOT initiate an apply itself — the decision of whether to bring the infrastructure back in line with the code (a regular apply) or update the code to reflect the real infrastructure remains with the engineer",
+   "Drift Detection automatically deletes and recreates the resource in which drift was detected",
+   "Drift Detection only works for resources marked with lifecycle { prevent_destroy = true }"
+  ],
+  "correct_index": 1,
+  "explanation": "Drift Detection in HCP Terraform periodically runs a background refresh-only-like plan for the workspace, and upon detecting a discrepancy between state and reality, surfaces it as a drift indicator in the UI (and may notify via configured integrations) — but does NOT take any automatic corrective action (apply). The engineer decides whether to run a regular apply to restore the infrastructure to the state described in the code, or to update the code to reflect an intentional manual change.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h66",
+  "topic": "Terraform",
+  "question": "Given a module combining lifecycle.precondition with a check across several independent input variables (not directly tied to the resource itself):\n```\nresource \"aws_autoscaling_group\" \"app\" {\n  min_size = var.min_size\n  max_size = var.max_size\n  # ...\n\n  lifecycle {\n    precondition {\n      condition     = var.min_size <= var.max_size\n      error_message = \"min_size must not exceed max_size.\"\n    }\n  }\n}\n```\nWhy does it make more sense to place this check in lifecycle.precondition on the resource, rather than in separate variable validation blocks for min_size and max_size?",
+  "options": [
+   "variable validation fundamentally doesn't support numeric comparisons — only string comparisons",
+   "variable validation is scoped to a SINGLE variable and cannot reference the value of ANOTHER variable in its condition, whereas lifecycle.precondition, being at the resource-block level, has access to multiple variables/expressions simultaneously — which is necessary to check invariants that depend on a RELATIONSHIP between several values (min_size <= max_size), rather than on each value individually",
+   "lifecycle.precondition executes faster than variable validation for purely technical performance reasons",
+   "Both constructs are fully equivalent in this case — the choice is arbitrary, with no functional difference"
+  ],
+  "correct_index": 1,
+  "explanation": "A validation block inside variable is historically scoped to reference ONLY that variable itself (var.min_size) and cannot directly reference var.max_size in its condition (the check is confined to a single variable's context). lifecycle.precondition, being declared at the resource, module, or output block level, has access to arbitrary configuration expressions, including several different variables at once — making it the appropriate place to check invariants that depend on a relationship between multiple values.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h67",
+  "topic": "Terraform",
+  "question": "Given a terraform test snippet checking several scenarios via separate run blocks with variable overrides, but sharing a common provider configuration via a top-level provider block:\n```\nprovider \"aws\" {\n  region = \"eu-west-1\"\n}\n\nrun \"test_small\" {\n  command = plan\n  variables { size = \"small\" }\n}\n\nrun \"test_large\" {\n  command = plan\n  variables { size = \"large\" }\n}\n```\nIf BOTH runs use command = plan (no apply), is there any need for explicit state 'cleanup' between them, so that test_large isn't accidentally affected by test_small's results?",
+  "options": [
+   "Yes, a run with command = destroy MUST be inserted between the run blocks, otherwise both runs would share the same state",
+   "No — by default, each run block in terraform test executes with its OWN isolated state instance (unless it deliberately reuses a module across runs for multi-step scenarios, as in the run.setup.output pattern) — so variable overrides in one run do NOT affect another run in the same test file, and explicit cleanup between independent command=plan runs is not required",
+   "Isolation between runs is only possible using SEPARATE .tftest.hcl files — within one file, all runs necessarily share a common state",
+   "A top-level provider block is forbidden in terraform test — each run must declare its own provider"
+  ],
+  "correct_index": 1,
+  "explanation": "Each run block in a .tftest.hcl file by default operates with its own independent 'virtual' state instance — variables set in one run don't automatically carry over to another run (aside from the explicit cross-step reference pattern run.<name>.<output>, which deliberately links specific runs together). Therefore test_small and test_large in this example are fully isolated from each other with no need for explicit cleanup between them.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h68",
+  "topic": "Terraform",
+  "question": "An organization on HCP Terraform has set up a workspace structure using Workspace Tags with a dynamic tag filter in a Team Access policy (e.g. the 'network-team' has write access only to workspaces tagged 'network'). An engineer creates a new workspace and forgets to assign the 'network' tag to it, even though it actually manages network infrastructure. Which of the following correctly describes the consequences?",
+  "options": [
+   "HCP Terraform will automatically detect that the workspace belongs to 'network' based on the content of the .tf code (the presence of aws_vpc/aws_subnet resources) and assign the tag without user involvement",
+   "Tag-based Team Access is entirely static and does NOT react dynamically to workspace content — the 'network-team' team's access to this specific workspace is determined ONLY by the actual set of tags assigned to it at the time of the permission check; without the 'network' tag, network-team will not get the access configured for that tag, regardless of the workspace's real purpose",
+   "The absence of a tag makes the workspace accessible to ALL teams in the organization by default (fail-open)",
+   "Tag-based Team Access only applies to the initial creation of the workspace, not to subsequent runs/applies on it"
+  ],
+  "correct_index": 1,
+  "explanation": "Team Access configured via workspace tag bindings is evaluated purely based on the ACTUALLY ASSIGNED tags — it's not some 'smart' heuristic based on code content, but a direct policy↔tag mapping. If an engineer forgets to assign the needed tag, the corresponding team won't get the access configured for that tag, regardless of the workspace's real purpose — this is a common practical mistake when scaling access control via tags, requiring process discipline (e.g. mandatory tagging in the workspace-creation template).",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h69",
+  "topic": "Terraform",
+  "question": "Given code combining optional() with a nested object type, where the optional attribute is itself a complex object with its own validation-like behavior via defaults:\n```\nvariable \"cluster_config\" {\n  type = object({\n    name = string\n    autoscaling = optional(object({\n      min_nodes = optional(number, 1)\n      max_nodes = optional(number, 3)\n    }), {})\n  })\n}\n```\nIf the calling code passes `cluster_config = { name = \"prod\" }`, without specifying autoscaling at all, what will the resulting value of var.cluster_config.autoscaling.min_nodes be?",
+  "options": [
+   "null, because the outer optional() for autoscaling substitutes the default {} literally, without applying the INNER optional() values for min_nodes/max_nodes",
+   "1 — Terraform applies defaults RECURSIVELY: first, the outer optional(object({...}), {}) substitutes an empty object {} as the default for the missing autoscaling, after which Terraform 'fills in' that object according to the INNER optional() definitions of its own attributes (min_nodes gets its own default of 1, max_nodes gets 3), so the resulting value is equivalent to { min_nodes = 1, max_nodes = 3 }",
+   "The code fails with a type validation error, because nested optional() inside optional() is not supported",
+   "3, because with recursive default application, ONLY the last optional() in order within the type definition is used"
+  ],
+  "correct_index": 1,
+  "explanation": "Starting with support for 'defaults propagation' for nested optional types (Terraform 1.3+, with further improvements in subsequent releases), Terraform applies default values RECURSIVELY: the outer default ({}) for autoscaling is combined with the default values of its own inner optional attributes, so the resulting object ends up with min_nodes=1 and max_nodes=3, rather than just an empty {} with no further processing.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h70",
+  "topic": "Terraform",
+  "question": "On the HCP Terraform Business tier, a Policy Set has been configured applying OPA (Open Policy Agent) policies instead of Sentinel, with a policy that forbids public S3 buckets (checked via data.aws_s3_bucket_public_access_block in a rego file). What is the key difference in how HCP Terraform supports OPA compared to Sentinel as a policy-as-code engine?",
+  "options": [
+   "OPA policies are written in the rego language (rather than a Sentinel-specific language) and are evaluated through the same general policy set/enforcement level mechanism (advisory/mandatory) as Sentinel — HCP Terraform supports BOTH engines as alternative policy-as-code options, letting organizations choose the tool they're already familiar with, rather than requiring them to use only Sentinel",
+   "OPA has completely replaced Sentinel, and Sentinel policies are no longer supported by HCP Terraform in any tier",
+   "OPA policies can only run at the pre-plan stage, whereas Sentinel can only run at the post-plan stage, making them mutually exclusive in purpose",
+   "OPA has no access to plan data (tfplan) at all, and can only check static configuration code before values are computed"
+  ],
+  "correct_index": 0,
+  "explanation": "HCP Terraform supports both Sentinel and OPA (rego) as alternative policy-as-code engines within policy sets — both integrate into the same overall run lifecycle with the same set of enforcement levels (advisory/mandatory for OPA corresponds to the soft/hard-mandatory logic). This gives organizations that already have expertise/existing policies in rego (e.g. from Kubernetes/OPA Gatekeeper practice) the ability to reuse them for Terraform policies, without having to rewrite everything in Sentinel.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h71",
+  "topic": "Terraform",
+  "question": "A team manages AWS infrastructure with Terraform, and now needs to add a similar stack in Azure for disaster recovery. What exactly is the \"service-agnostic\"/multi-cloud nature of Terraform in this scenario — what transfers between clouds, and what must necessarily be written from scratch?",
+  "options": [
+   "The workflow transfers (init/plan/apply/destroy, the state model, HCL syntax, working with variables/outputs/modules) along with the team's overall process — but the actual resource blocks for azurerm_* must be written from scratch, since each provider describes its own set of resources matching that specific cloud's API",
+   "Terraform automatically translates aws_instance into azurerm_virtual_machine without any code changes, because both providers implement one common shared resource interface",
+   "Nothing transfers — each cloud requires a completely separate tool, and Terraform provides no common abstraction layer between clouds at all",
+   "Only the terraform.tfstate file itself transfers — it is universal across any provider and contains no cloud-specific data"
+  ],
+  "correct_index": 0,
+  "explanation": "Terraform's multi-cloud/service-agnostic nature does not mean automatic translation of resources between clouds — there is no single shared resource set spanning all providers. What stays consistent is the workflow and language layer: the same sequence of commands (init -> plan -> apply -> destroy), the same state model, the same HCL syntax, and the same mechanisms for variables/outputs/modules/expressions work regardless of which provider is in use. The actual resource blocks are specific to each cloud's API (aws_instance vs azurerm_virtual_machine) and are not carried over automatically — an engineer must rewrite them for the new provider. Terraform gives you one unified process and language, but it does not abstract away the differences between the underlying cloud APIs themselves.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h72",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\nprovider \"aws\" {\n  region = \"us-east-1\"\n}\n\nprovider \"azurerm\" {\n  features {}\n}\n\nresource \"aws_s3_bucket\" \"logs\" {\n  bucket = \"central-logs\"\n}\n\nresource \"azurerm_storage_account\" \"logs_mirror\" {\n  name = \"logsmirror\"\n  # ... references aws_s3_bucket.logs.bucket via a local value\n}\n```\nA single `terraform apply` creates resources in two different clouds through two different providers. What does this imply about Terraform's architecture that explains its hybrid/multi-cloud usage?",
+  "options": [
+   "This is impossible — a single state file cannot contain resources from different providers at the same time",
+   "Terraform Core has no knowledge of any specific cloud's details — it builds a single unified resource graph and manages resource lifecycle through a standardized protocol, while all AWS/Azure API specifics are encapsulated inside separate provider plugins; that's why a single apply/state can combine resources from an arbitrary set of providers within one graph",
+   "azurerm_storage_account.logs_mirror automatically syncs with aws_s3_bucket.logs at the API level without Terraform's involvement, simply because both resources are declared in the same .tf file",
+   "This only works in HCP Terraform (Terraform Cloud) — the open-source Terraform CLI does not support this"
+  ],
+  "correct_index": 1,
+  "explanation": "Terraform's architecture separates Core (dependency graph, state, the plan/apply engine, HCL) from providers (plugins that know a specific cloud/service's API). Core communicates with any provider through a single gRPC-based protocol, without knowing AWS or Azure details directly. That's exactly why a single resource graph and a single state can contain resources from an arbitrary set of providers at once — this isn't a feature of a particular backend or of HCP Terraform specifically, but a fundamental property of Terraform Core itself, available in any distribution including the open-source CLI.",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h73",
+  "topic": "Terraform",
+  "question": "Given the code:\n```\n# root module\nvariable \"env\" {\n  default = \"prod\"\n}\n\nmodule \"network\" {\n  source = \"./modules/network\"\n  # env is NOT passed into the module block\n}\n```\n```\n# modules/network/main.tf\nresource \"aws_vpc\" \"main\" {\n  tags = { Environment = var.env }  # env is declared separately inside this module\n}\n```\nA variable named `env` is also declared inside `modules/network`. Given module variable scope isolation, what happens on `terraform plan`?",
+  "options": [
+   "var.env inside modules/network automatically inherits the value of var.env from the root module, since the names match and Terraform searches for name matches across the whole project",
+   "var.env inside modules/network is a completely separate variable in its own scope; it has no connection whatsoever to var.env in the root module just because the names match, and it will only get its value from its own default (if declared) or via an explicit env = ... argument inside the module \"network\" { ... } block",
+   "Terraform will raise a naming-conflict error, since the same variable name var.env cannot be used across two different .tf files in the same project at once",
+   "The value will be picked up from the root module's terraform.tfvars, since .tfvars files are global across all modules in a project"
+  ],
+  "correct_index": 1,
+  "explanation": "Every module (including the root module) has its own, fully isolated variable scope. A matching variable name between modules is pure coincidence — it creates no link between the values: var.env in root and var.env in modules/network are two independent objects. The only way to pass a value from a parent into a child module is to explicitly set the corresponding argument inside the module \"...\" { variable_name = value } block. Without that, the child module will fall back to its own default (if one is declared), or if no default exists, plan will fail with a 'no value for required variable' error. .tfvars files are also not global across all modules — they apply only at the level of the module for which terraform plan/apply is being run (typically the root module).",
+  "difficulty": "hard"
+ },
+ {
+  "id": "tf-h74",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "In a CI/CD pipeline, the `plan` stage saves the plan to a file and publishes it as an artifact for human review. After approval, the `apply` stage must guarantee it applies EXACTLY what was approved — without recomputing the plan and without risking that something drifted between stages.\nPlan stage:\n```\nterraform plan -out=prod.tfplan\n```\nWhich command in the apply stage guarantees this?",
+  "options": [
+   "terraform apply prod.tfplan",
+   "terraform apply -auto-approve",
+   "terraform plan -out=prod.tfplan && terraform apply -auto-approve",
+   "terraform apply -refresh=false"
+  ],
+  "correct_index": 0,
+  "explanation": "When apply is invoked with a path to a saved plan file (no flags like -auto-approve), Terraform applies exactly the actions recorded in that file — no plan recomputation and no confirmation prompt (not needed: the plan is already approved). Options (b) and (c) never pass a plan file to apply at all — Terraform builds a NEW plan against the current state and applies it immediately: if anything changed between review and apply (drift, provider update), what gets applied isn't what was approved. (d) `-refresh=false` also doesn't accept a plan file — it's just a flag on a regular `apply` with no argument that only skips refreshing state before recomputing the plan, it doesn't bind apply to a saved file."
+ },
+ {
+  "id": "tf-h75",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Production incident: you need to fix one resource (`aws_instance.web`) immediately, but the same config already has unrelated feature changes that shouldn't be applied yet. A colleague suggests:\n```\nterraform apply -target=aws_instance.web\n```\nWhat's the correct assessment of this approach?",
+  "options": [
+   "It's an acceptable one-off technique for an incident, but shouldn't become a routine practice — state can drift out of sync with what a full plan of the configuration would produce",
+   "-target never actually works and Terraform will fail with an error",
+   "-target still applies the entire plan, it just hides the other resources from the output",
+   "Once used, the targeted resource is permanently excluded from future regular plans"
+  ],
+  "correct_index": 0,
+  "explanation": "`-target` is intentionally an 'escape hatch' (Terraform itself warns about this in its output): it scopes apply to a specific resource and its dependencies, which is fine for a targeted fix, but systematic use leads to a state that diverges from what a full `plan` without -target would produce — deferred changes can surface unexpectedly on the next regular apply. (b)/(c)/(d) describe behavior that doesn't exist: -target genuinely limits the scope of applied actions (not just the displayed output), doesn't fail by default, and leaves no permanent marker on the configuration or state."
+ },
+ {
+  "id": "tf-h76",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "An EC2 instance already exists in AWS (created manually via console) but isn't in Terraform state. You wrote a `resource \"aws_instance\" \"web\" {...}` block that exactly matches its current configuration, and you want Terraform to start managing this existing instance WITHOUT recreating it. Which command is designed for this?",
+  "options": [
+   "terraform import aws_instance.web i-0123456789abcdef0",
+   "terraform state mv aws_instance.web aws_instance.web_new",
+   "terraform taint aws_instance.web",
+   "Add a moved { from = ... to = ... } block to the configuration"
+  ],
+  "correct_index": 0,
+  "explanation": "`terraform import <address> <real-resource-id>` is exactly the command for linking existing infrastructure (not created by Terraform) to a resource block in configuration without recreating it. `state mv` renames/moves an entry ALREADY in state (doesn't apply if the resource isn't in state at all). `taint` marks an existing managed resource for recreation on next apply — the opposite goal. A `moved` block describes a resource address rename WITHIN the configuration during refactoring (also requires the resource to already be in state under the old address) — it doesn't import new infrastructure."
+ },
+ {
+  "id": "tf-h77",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "During a module refactor, a resource moved from `module.old_name.aws_instance.web` to `module.new_name.aws_instance.web`. This rename needs to be captured in code and version-controlled in git, so every team member's state gets updated automatically on their next `terraform apply`, without manual commands on each machine. How should this be done?",
+  "options": [
+   "Add a moved { from = module.old_name.aws_instance.web; to = module.new_name.aws_instance.web } block to the configuration",
+   "Have every developer manually run terraform state mv module.old_name.aws_instance.web module.new_name.aws_instance.web",
+   "Run terraform import for the new address",
+   "Run terraform taint on the old address before apply"
+  ],
+  "correct_index": 0,
+  "explanation": "A `moved` block is part of the configuration (committed to git) and is processed automatically on `terraform plan/apply` by ANYONE who applies this config: Terraform updates the state address itself, without recreating the resource and without any manual steps. `state mv` produces the same result but is a one-off manual command that would need to be repeated individually on every machine/environment — it isn't captured in code. `import` is for bringing resources into state that aren't there yet (not for renaming an existing entry). `taint` has nothing to do with address renaming — it's about forcing recreation."
+ },
+ {
+  "id": "tf-h78",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "`null_resource.deploy_hook` must be recreated every time `aws_ami.app.id` changes, even though `null_resource` doesn't reference that AMI in any of its own arguments. Which mechanism correctly and automatically ties one resource's recreation to another resource's attribute change, without creating a direct reference in the arguments?",
+  "options": [
+   "lifecycle { replace_triggered_by = [aws_ami.app.id] }",
+   "depends_on = [aws_ami.app]",
+   "Manually run terraform taint null_resource.deploy_hook before every apply",
+   "lifecycle { ignore_changes = [aws_ami.app.id] }"
+  ],
+  "correct_index": 0,
+  "explanation": "`replace_triggered_by` is designed exactly for this: it forces Terraform to recreate a resource when the referenced attribute/resource changes, even without a direct argument reference. `depends_on` only sets EXECUTION ORDER (what gets created first), it doesn't force the dependent resource to be recreated when the dependency changes. Manual `taint` before every apply isn't automated and is easy to forget. `ignore_changes` does the exact opposite — it makes Terraform IGNORE changes to the attribute rather than react to them."
+ },
+ {
+  "id": "tf-h79",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "A list of subnets is used as `aws_subnet.this[count.index]` (via `count`). Removing a subnet from the MIDDLE of the list causes Terraform to recreate many subsequent subnets due to index shifting, even though their configuration hasn't actually changed. What's the correct HCL-level fix?",
+  "options": [
+   "Replace count with for_each on a map/set keyed by a stable identifier (e.g. CIDR) instead of a numeric index",
+   "Add lifecycle { ignore_changes = [count] } to the resource",
+   "Sort the list before count so removals always happen from the end",
+   "Run terraform taint on all subnets right after removing one from the list"
+  ],
+  "correct_index": 0,
+  "explanation": "The root cause is `count.index` binding the resource to its position in the list: removing a middle element shifts all subsequent indices, and Terraform sees this as a 'different' resource at every shifted position. `for_each` over a map/set keyed on a stable value (not position) fully removes this problem — each resource is identified by its key regardless of the order of others. `ignore_changes = [count]` isn't a real working mechanism for this scenario and won't fix the index-shift problem. Sorting doesn't remove the underlying nature of count-based indexing. `taint` forces recreation rather than preventing it."
+ },
+ {
+  "id": "tf-h80",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "An external billing system automatically adds/changes the `CostCenter` tag on resources AFTER Terraform creates them. Every `terraform plan` now shows drift on exactly this tag, while every other attribute of the resource should keep being fully tracked. Which setting solves this precisely?",
+  "options": [
+   "lifecycle { ignore_changes = [tags[\"CostCenter\"]] } (or ignore_changes = [tags] if all tags should be ignored)",
+   "lifecycle { ignore_changes = all }",
+   "lifecycle { prevent_destroy = true }",
+   "Remove the tags block from the resource configuration entirely"
+  ],
+  "correct_index": 0,
+  "explanation": "`ignore_changes` with a specific attribute path (or specifically `tags` as a whole, if the external edit only concerns tags) is exactly the targeted tool for 'this attribute can change externally, don't treat it as drift', while the rest of the resource keeps being tracked normally. `ignore_changes = all` is excessively broad — it disables drift tracking for ALL attributes of the resource, not just the tag. `prevent_destroy` has nothing to do with attribute drift — it just blocks resource destruction. Removing the `tags` block from configuration doesn't stop the drift — Terraform will still try to drive the resource toward having no tags, conflicting with the external system every time."
+ },
+ {
+  "id": "tf-h81",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "The `app` module must only be applied after the IAM role from the `iam` module is fully created and its AWS eventual consistency has definitely settled, but no argument in the `app` module actually references any output of the `iam` module (a purely ordering dependency). How do you explicitly declare this dependency between modules?",
+  "options": [
+   "module \"app\" { ... depends_on = [module.iam] }",
+   "Add a count to module \"app\" that references any resource from module.iam",
+   "Use a null_resource with local-exec between the modules",
+   "Terraform doesn't allow declaring a dependency between modules without referencing an output"
+  ],
+  "correct_index": 0,
+  "explanation": "`depends_on` can be specified directly on a `module` block, explicitly declaring execution order without needing to artificially consume any output — this is exactly the mechanism intended for this case. An artificial `count` referencing a resource just to create an implicit dependency is a working but messy workaround when a direct tool exists. A `null_resource` with `local-exec` is an overkill and unreliable solution for simple module ordering. The claim that explicit inter-module dependencies are impossible is false — `depends_on` has been supported on module blocks since Terraform 0.13."
+ },
+ {
+  "id": "tf-h82",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "You suspect someone manually changed a resource in the AWS console (emergency fix). You need to update Terraform state to reflect the real current cloud state, but must NOT compute or propose any infrastructure changes (no plan to create/modify/delete resources). Which command is designed exactly for this?",
+  "options": [
+   "terraform apply -refresh-only",
+   "terraform plan",
+   "terraform state pull",
+   "terraform apply -target on the same resource address"
+  ],
+  "correct_index": 0,
+  "explanation": "`-refresh-only` (a plan/apply mode) updates state to match the real cloud state and proposes applying ONLY that state sync — without computing or proposing any infrastructure changes. A regular `terraform plan` also refreshes its internal view of state, but shows a plan to bring the REAL infrastructure back in line with the configuration (i.e. it would propose reverting the manual fix) — not what's needed here. `terraform state pull` just dumps the current remote state to stdout/a file, without contacting the real provider to check freshness at all. `apply -target` without `-refresh-only` still computes and proposes a change plan for the targeted resource, not just a state refresh."
+ },
+ {
+  "id": "tf-h83",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "The backend is S3 with DynamoDB state locking enabled. Two engineers run `terraform apply` against the same state at nearly the same time. What behavior should you correctly expect?",
+  "options": [
+   "The second apply fails to acquire the lock ('Error acquiring the state lock') and either waits or errors out until the first one releases it",
+   "Both applies run in parallel and their results get merged into state correctly",
+   "The second apply silently overwrites the first one's state with no warning",
+   "DynamoDB automatically deletes the state file on conflict to prevent corruption"
+  ],
+  "correct_index": 0,
+  "explanation": "This is exactly why S3 backend's DynamoDB state locking exists: the first apply acquires a lock in the DynamoDB table for the duration of the run, the second concurrent apply gets an explicit lock-acquisition error (and by default fails, or waits with `-lock-timeout`), preventing a race. Without locking, two concurrent applies could genuinely write conflicting state (the exact risk locking eliminates) — but 'correctly merging results' simply isn't how this works technically. Silent overwrite without warning and DynamoDB auto-deleting state don't match the real mechanism (DynamoDB here only holds the lock record, not the state itself)."
+ },
+ {
+  "id": "tf-h84",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Backend is S3, workspaces are enabled (default and prod are in use). The state key in the backend configuration is simply `key = \"global/terraform.tfstate\"`. How does Terraform actually build the state file path for the `prod` workspace in S3?",
+  "options": [
+   "It automatically prepends the workspace_key_prefix (default 'env:') and the workspace name before the given key: 'env:/prod/global/terraform.tfstate'",
+   "It automatically creates a separate S3 bucket named prod",
+   "It uses the exact same path 'global/terraform.tfstate' for every workspace simultaneously",
+   "It requires a separate backend block written manually for each workspace"
+  ],
+  "correct_index": 0,
+  "explanation": "For any non-default workspace, the S3 backend automatically inserts a prefix (default `env:`, configurable via `workspace_key_prefix`) and the workspace name before the given `key`, producing a path like `env:/<workspace>/<key>` — so different workspaces are physically stored as different objects in the SAME bucket under one `key`, without creating separate buckets and without separate backend blocks. Using the exact same path for every workspace at once would defeat the entire point of workspace isolation."
+ },
+ {
+  "id": "tf-h85",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "Configuration previously used a local backend (state stored in a file on disk). You changed the `backend` block to S3 and ran `terraform init`. What happens to the existing local state?",
+  "options": [
+   "Terraform detects the backend change and itself offers to copy the existing state into the new backend (an interactive confirmation prompt during init)",
+   "The existing state is automatically deleted, and work starts from an empty state",
+   "Init fails with an error; migration must be done entirely manually via terraform state push",
+   "You must run terraform destroy first before changing the backend"
+  ],
+  "correct_index": 0,
+  "explanation": "`terraform init` detects a change in backend configuration and itself offers to migrate (copy) the existing state into the new backend, with an explicit confirmation prompt — this is the built-in, expected workflow for backend migration; a manual `state push` isn't a required step. Neither state deletion, nor a hard error, nor a requirement to run `destroy` first happens during a routine backend change — otherwise changing backends would be a destructive operation by default, which would contradict Terraform's design."
+ },
+ {
+  "id": "tf-h86",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "An engineer saved a plan: `terraform plan -out=plan.tfplan`. Before they could run `terraform apply plan.tfplan`, a colleague applied other changes to the same state through a separate apply. What happens when trying to apply the old saved `plan.tfplan`?",
+  "options": [
+   "Terraform detects that state has changed since the plan was created and errors out ('stale plan') instead of silently applying an outdated plan",
+   "The plan is applied as-is, completely ignoring the newer state changes",
+   "Terraform automatically merges the stale plan with the new state changes",
+   "The plan file automatically becomes invalid and gets deleted on the next init"
+  ],
+  "correct_index": 0,
+  "explanation": "Terraform records in the saved plan file a binding to the state it was computed against; if state has changed since then (another apply), attempting to apply the stale plan produces an explicit stale-plan error rather than silently applying potentially outdated actions — this is a deliberate safeguard against exactly this race scenario. There's no automatic 'smart' merging of a stale plan with new state: that would mean unpredictably applying actions computed for a different state. The plan file isn't automatically deleted by anything (including init) — it's just a static file on disk/in a CI artifact."
+ },
+ {
+  "id": "tf-h87",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "A resource should stop being managed by Terraform (ownership transfers to another team/tool), but the actual cloud infrastructure must remain untouched (not destroyed). This decision needs to be captured in configuration and version-controlled in git — not executed as a one-off manual command on a single machine. Which Terraform 1.7+ mechanism is designed for this?",
+  "options": [
+   "A removed { from = <address>; lifecycle { destroy = false } } block in the configuration",
+   "Simply delete the resource block from configuration and run terraform apply",
+   "terraform state rm <address>, run by every developer locally",
+   "lifecycle { prevent_destroy = true }, leaving the resource block as-is"
+  ],
+  "correct_index": 0,
+  "explanation": "The `removed` block (Terraform ≥1.7) with `destroy = false` in configuration is the purpose-built, version-controlled way to explicitly declare 'this resource is no longer managed by this config' and guarantee that apply will remove it from state without attempting to destroy it — and this is applied automatically for anyone who applies the config. Simply deleting the resource block WITHOUT a `removed` block causes Terraform to plan to DESTROY the resource on apply — the exact opposite of the desired outcome. `state rm` produces the desired effect (removes from state without touching the cloud), but it's a one-off manual command not captured in code — everyone would need to run it individually. `prevent_destroy` doesn't remove the resource from Terraform's management, it just blocks its deletion — the resource stays fully managed by the config."
+ },
+ {
+  "id": "tf-h88",
+  "topic": "Terraform",
+  "difficulty": "hard",
+  "question": "A variable is declared as `variable \"db_password\" { sensitive = true }`. It's used inside a `local` value, which is then passed into `output \"connection_summary\"`, which itself is NOT marked `sensitive = true`. What happens on `terraform plan`/`apply`?",
+  "options": [
+   "Terraform errors out already at plan time, requiring the output itself to be explicitly marked sensitive = true, since it references sensitive data",
+   "The value gets printed in plain text in plan/apply output, since local values don't propagate the sensitive flag further",
+   "Terraform automatically hides the value in output without requiring the output to be marked sensitive",
+   "This causes a terraform init error, not a plan/apply error"
+  ],
+  "correct_index": 0,
+  "explanation": "Since Terraform 0.15, the 'sensitivity' flag propagates through expressions (including local values) all the way to outputs: if an output references sensitive data but isn't itself marked `sensitive = true`, Terraform requires that mark to be added explicitly and errors out already at plan time, rather than silently printing the value — propagation works precisely 'through' locals rather than stopping at them. An EXPLICIT `sensitive = true` mark on the output itself is still required — there's no automatic hiding without it. The error occurs at plan/apply (where output values are evaluated), not at `init`, which doesn't evaluate variable/output values at all."
+ }
+]

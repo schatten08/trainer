@@ -1,0 +1,15 @@
+services:
+  interview-trainer:
+    build: .
+    container_name: interview_trainer
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8201:8000"
+    networks:
+      - nginx-proxy-manager_default
+
+networks:
+  nginx-proxy-manager_default:
+    external: true

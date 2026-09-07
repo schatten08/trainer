@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Interview Trainer — AWS/Docker/Terraform/GitLab CI/K8s/Git</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="app-header">
+    <h1>Interview Trainer</h1>
+    <p class="subtitle">AWS · Docker · Terraform · GitLab CI · Kubernetes · Git</p>
+  </header>
+
+  <!-- Экран настройки -->
+  <section id="screen-setup" class="screen active">
+    <div class="card">
+      <h2>Тренажёр собеседований</h2>
+
+      <div class="field">
+        <label for="topic-select">Тема (для Мок-интервью)</label>
+        <select id="topic-select">
+          <option value="">Все темы (вперемешку)</option>
+        </select>
+      </div>
+
+      <div class="secondary-actions">
+        <button id="btn-mock-interview" class="btn-secondary">🎤 Мок-интервью (AI-оценка)</button>
+        <button id="btn-linux-trainer" class="btn-secondary">🐧 Linux Troubleshooting (AI-оценка методологии)</button>
+        <button id="btn-tf-quiz" class="btn-secondary">🧱 Terraform Quiz (подготовка к экзамену)</button>
+        <button id="btn-tf-exam" class="btn-secondary btn-exam">⏱️ Экзамен Terraform Associate (симуляция)</button>
+        <button id="btn-pdp" class="btn-secondary">📋 План развития (PDP)</button>
+      </div>
+
+      <div class="field" id="row-tf-quiz-difficulty">
+        <label for="tf-quiz-difficulty-select">Сложность вопросов Terraform Quiz</label>
+        <select id="tf-quiz-difficulty-select">
+          <option value="">Все уровни (вперемешку)</option>
+          <option value="easy">Базовые</option>
+          <option value="hard">Продвинутые (hard)</option>
+        </select>
+      </div>
+
+      <div class="field" id="row-tf-quiz-count">
+        <label>Количество вопросов Terraform Quiz</label>
+        <div class="btn-group" id="tf-quiz-count-group">
+          <button type="button" class="count-btn" data-count="10">10</button>
+          <button type="button" class="count-btn selected" data-count="15">15</button>
+          <button type="button" class="count-btn" data-count="20">20</button>
+          <button type="button" class="count-btn" id="tf-quiz-count-all" data-count="15">Все</button>
+        </div>
+      </div>
+
+      <label class="toggle-row" id="row-mock-senior">
+        <input type="checkbox" id="mock-include-senior">
+        <span>🎓 В мок-интервью включать и senior-вопросы (архитектурные)</span>
+      </label>
+
+      <div class="field" id="row-linux-difficulty">
+        <label for="linux-difficulty-select">Сложность Linux-кейсов</label>
+        <select id="linux-difficulty-select">
+          <option value="">Все уровни (вперемешку)</option>
+          <option value="junior">Junior</option>
+          <option value="middle">Middle</option>
+          <option value="senior">Senior</option>
+        </select>
+      </div>
+
+      <div class="field" id="row-linux-subtopic">
+        <label for="linux-subtopic-select">Подраздел Linux Troubleshooting</label>
+        <select id="linux-subtopic-select">
+          <option value="">Все подразделы (вперемешку)</option>
+        </select>
+      </div>
+
+      <div class="history" id="history-block">
+        <h3>Последние результаты</h3>
+        <ul id="history-list"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Экран вопроса "Мок-интервью" -->
+  <section id="screen-mock" class="screen">
+    <div class="card">
+      <div class="quiz-progress">
+        <span id="mock-progress-text">Вопрос 1 / 5</span>
+        <span id="mock-progress-topic" class="badge"></span>
+      </div>
+      <div class="progress-bar"><div id="mock-progress-fill" class="progress-fill"></div></div>
+
+      <h2 id="mock-question-text">Вопрос</h2>
+
+      <textarea id="mock-answer-input" class="flash-recall-input" rows="6" placeholder="Сформулируйте ответ своими словами..."></textarea>
+
+      <div class="quiz-nav">
+        <button id="btn-mock-prev" class="btn-secondary">← Назад</button>
+        <button id="btn-mock-next" class="btn-primary">Следующий вопрос →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Экран ожидания AI-ревью -->
+  <section id="screen-mock-loading" class="screen">
+    <div class="card mock-loading-card">
+      <p>🤖 AI проверяет ваши ответы, это может занять до минуты...</p>
+    </div>
+  </section>
+
+  <!-- Экран результатов "Мок-интервью" -->
+  <section id="screen-mock-result" class="screen">
+    <div class="card">
+      <h2>Результат мок-интервью</h2>
+      <div class="result-score">
+        <span id="mock-result-pct">0%</span>
+      </div>
+
+      <p id="mock-overall-feedback" class="retry-info"></p>
+
+      <div id="mock-result-items" class="mock-result-items"></div>
+
+      <div class="actions">
+        <button id="btn-mock-restart" class="btn-primary">В меню</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Экран вопроса "Linux Troubleshooting" -->
+  <section id="screen-linux" class="screen">
+    <div class="card">
+      <div class="quiz-progress">
+        <span id="linux-progress-text">Вопрос 1 / 5</span>
+        <span id="linux-progress-topic" class="badge"></span>
+      </div>
+      <div class="progress-bar"><div id="linux-progress-fill" class="progress-fill"></div></div>
+
+      <h2 id="linux-question-text">Вопрос</h2>
+
+      <textarea id="linux-answer-input" class="flash-recall-input" rows="8" placeholder="Опишите порядок диагностики: какие команды/инструменты и в какой последовательности..."></textarea>
+
+      <div class="quiz-nav">
+        <button id="btn-linux-prev" class="btn-secondary">← Назад</button>
+        <button id="btn-linux-next" class="btn-primary">Следующий вопрос →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Экран ожидания AI-ревью "Linux Troubleshooting" -->
+  <section id="screen-linux-loading" class="screen">
+    <div class="card mock-loading-card">
+      <p>🤖 AI проверяет вашу диагностическую методологию, это может занять до минуты...</p>
+    </div>
+  </section>
+
+  <!-- Экран результатов "Linux Troubleshooting" -->
+  <section id="screen-linux-result" class="screen">
+    <div class="card">
+      <h2>Результат Linux Troubleshooting</h2>
+      <div class="result-score">
+        <span id="linux-result-pct">0%</span>
+      </div>
+
+      <p id="linux-overall-feedback" class="retry-info"></p>
+
+      <div id="linux-result-items" class="mock-result-items"></div>
+
+      <div class="actions">
+        <button id="btn-linux-restart" class="btn-primary">В меню</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Экран вопроса "Terraform Quiz" (MCQ) -->
+  <section id="screen-tf-quiz" class="screen">
+    <div class="card">
+      <div class="quiz-progress">
+        <span id="tf-quiz-progress-text">Вопрос 1 / 15</span>
+        <span id="tf-quiz-progress-topic" class="badge"></span>
+      </div>
+      <div class="progress-bar"><div id="tf-quiz-progress-fill" class="progress-fill"></div></div>
+
+      <h2 id="tf-quiz-question-text">Вопрос</h2>
+
+      <div id="tf-quiz-options-list" class="options-list"></div>
+
+      <button id="btn-tf-quiz-skip" class="btn-skip">Не знаю / затрудняюсь ответить</button>
+
+      <div id="tf-quiz-explanation-box" class="explanation-box hidden">
+        <p id="tf-quiz-explanation-text"></p>
+      </div>
+
+      <button id="btn-tf-quiz-next" class="btn-primary hidden">Следующий вопрос →</button>
+    </div>
+  </section>
+
+  <!-- Экран результатов "Terraform Quiz" -->
+  <section id="screen-tf-quiz-result" class="screen">
+    <div class="card">
+      <h2>Результат Terraform Quiz</h2>
+      <div class="result-score">
+        <span id="tf-quiz-result-score-value">0 / 0</span>
+        <span id="tf-quiz-result-score-pct" class="badge"></span>
+      </div>
+
+      <div class="result-breakdown">
+        <span class="breakdown-item breakdown-correct">✓ Верно: <b id="tf-quiz-result-correct-count">0</b></span>
+        <span class="breakdown-item breakdown-wrong">✗ Неверно: <b id="tf-quiz-result-wrong-count">0</b></span>
+        <span class="breakdown-item breakdown-skipped">? Не знал: <b id="tf-quiz-result-skipped-count">0</b></span>
+      </div>
+
+      <p id="tf-quiz-result-retry-info" class="retry-info hidden"></p>
+
+      <div class="actions">
+        <button id="btn-tf-quiz-restart" class="btn-primary">В меню</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Экран подтверждения запуска "Экзамена" (полная симуляция Terraform Associate 004) -->
+  <section id="screen-exam-intro" class="screen">
+    <div class="card">
+      <h2>⏱️ Экзамен Terraform Associate — симуляция</h2>
+      <p class="exam-intro-text">
+        Полная имитация условий реального экзамена Terraform Associate 004:
+      </p>
+      <ul class="exam-intro-list">
+        <li><b>65 вопросов</b> — фиксированная выборка из всего доступного пула (без выбора количества/сложности)</li>
+        <li><b>60 минут</b> — обратный отсчёт, при истечении времени экзамен завершается автоматически с текущими ответами</li>
+        <li><b>Порог сдачи — 70%</b></li>
+        <li>Никаких подсказок и объяснений во время прохождения — правильный ответ и разбор ошибок показываются только в самом конце</li>
+        <li>Вопросы идут по одному, без возврата к предыдущим</li>
+      </ul>
+      <div class="field">
+        <label for="exam-lang-select">Язык вопросов</label>
+        <select id="exam-lang-select">
+          <option value="ru" selected>Русский</option>
+          <option value="en">English (как на реальном экзамене)</option>
+        </select>
+      </div>
+      <div class="actions">
+        <button id="btn-exam-start-confirm" class="btn-primary btn-exam">Начать экзамен →</button>
+        <button id="btn-exam-cancel" class="btn-secondary">Отмена</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Экран вопроса "Экзамен" -->
+  <section id="screen-exam" class="screen">
+    <div class="card">
+      <div class="quiz-progress">
+        <span id="exam-progress-text">Вопрос 1 / 65</span>
+        <span id="exam-timer" class="badge badge-timer">60:00</span>
+      </div>
+      <div class="progress-bar"><div id="exam-progress-fill" class="progress-fill"></div></div>
+
+      <h2 id="exam-question-text">Вопрос</h2>
+
+      <div id="exam-options-list" class="options-list"></div>
+
+      <button id="btn-exam-skip" class="btn-skip">Не знаю / затрудняюсь ответить</button>
+    </div>
+  </section>
+
+  <!-- Экран результатов "Экзамена" -->
+  <section id="screen-exam-result" class="screen">
+    <div class="card">
+      <h2 id="exam-result-title">Результат экзамена</h2>
+      <div id="exam-result-verdict" class="exam-verdict">
+        <span id="exam-result-verdict-text"></span>
+      </div>
+
+      <div class="result-score">
+        <span id="exam-result-score-value">0 / 0</span>
+        <span id="exam-result-score-pct" class="badge"></span>
+      </div>
+
+      <div class="result-breakdown">
+        <span class="breakdown-item breakdown-correct"><span id="exam-result-label-correct">✓ Верно:</span> <b id="exam-result-correct-count">0</b></span>
+        <span class="breakdown-item breakdown-wrong"><span id="exam-result-label-wrong">✗ Неверно:</span> <b id="exam-result-wrong-count">0</b></span>
+        <span class="breakdown-item breakdown-skipped"><span id="exam-result-label-skipped">? Не знал:</span> <b id="exam-result-skipped-count">0</b></span>
+      </div>
+
+      <p id="exam-result-time-info" class="retry-info"></p>
+
+      <div id="exam-result-review" class="mock-result-items"></div>
+
+      <div class="actions">
+        <button id="btn-exam-restart" class="btn-primary">В меню</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Экран "План развития" (PDP) -->
+  <section id="screen-pdp" class="screen">
+    <div class="card">
+      <div class="pdp-header">
+        <h2>План развития (PDP)</h2>
+        <p class="pdp-subtitle">Цель: Senior Systems Engineer (L3). По фидбеку после мок-интервью.</p>
+      </div>
+
+      <div class="pdp-overall">
+        <div class="pdp-overall-bar-bg"><div id="pdp-overall-fill" class="pdp-overall-bar-fill"></div></div>
+        <span id="pdp-overall-text" class="pdp-overall-text">0 / 0 выполнено</span>
+      </div>
+
+      <div id="pdp-groups"></div>
+
+      <div class="actions">
+        <button id="btn-pdp-back" class="btn-primary">В меню</button>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
