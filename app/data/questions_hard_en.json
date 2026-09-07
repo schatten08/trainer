@@ -424,10 +424,10 @@
     "topic": "Terraform",
     "question": "Two engineers work on different OSes (one on Windows, the other on Linux/ARM Mac). After git pull, the second engineer's terraform init fails with a checksum mismatch error for the hashicorp/aws provider, even though .terraform.lock.hcl wasn't manually edited. What is the most likely cause and correct fix?",
     "options": [
-      "The .terraform.lock.hcl file is corrupted and should be completely deleted and regenerated without checksum verification",
+      "The .terraform.lock.hcl file is corrupted (e.g. due to a git merge conflict that left duplicated or partially overwritten hash lines) — the correct fix is to delete the lock file and run terraform init -upgrade so Terraform recomputes and writes the hashes from scratch for the current platform, without manually specifying -platform.",
       "The lock file, first committed by one engineer, contains provider checksums only for their platform (e.g. only for Windows/amd64) — the second engineer works on a different platform (darwin/arm64), for which the lock file has no checksums; the fix is to run terraform providers lock explicitly specifying ALL needed platforms (-platform=windows_amd64 -platform=darwin_arm64) and commit the updated lock file",
-      "The problem is related to the Terraform CLI version itself, not the platform — the CLI needs to be updated to the latest version",
-      "A checksum mismatch means the provider has been compromised and must be immediately replaced with another one"
+      "The problem is related to the Terraform CLI version itself, not the provider or platform — starting with certain CLI versions the lock file hash format changed, so the CLI needs to be updated to the latest version on both machines, after which the checksum mismatch disappears automatically on the next init.",
+      "A checksum mismatch means the specific hashicorp/aws provider binary downloaded by the second engineer was compromised or tampered with — the plugin cache (~/.terraform.d/plugin-cache) needs to be cleared immediately, the security team notified, and the provider temporarily pinned to a previously verified version."
     ],
     "correct_index": 1,
     "explanation": "By default, terraform init only records provider checksums in .terraform.lock.hcl for the platform where init was run. If a team works across multiple different OSes/architectures on the same repository, terraform providers lock -platform=... should be run for each platform in use (ahead of time or upon first encountering the issue), so the lock file contains all needed checksums — a standard practice for teams with heterogeneous development environments.",
@@ -438,10 +438,10 @@
     "topic": "Terraform",
     "question": "During a terraform apply on 50 resources, the AWS provider returned a rate-limiting error on the 30th resource, and apply failed, leaving 29 resources created and updated in state, while the remaining 20 were left untouched. What approach to retrying is correct and safe?",
     "options": [
-      "You must first roll back (destroy) all 29 successfully created resources, then run apply from scratch",
+      "You must first roll back (destroy) all 29 successfully created resources, then run apply from scratch — otherwise a repeated apply will try to create them again and fail with a 'resource already exists' error, since state doesn't protect against this conflict after a partial failure.",
       "Simply run terraform apply again with no flags — based on the current state (where 29 resources are already marked as applied) and the current configuration, Terraform itself will determine what still needs to be created/changed and will continue from where the failure occurred — this is standard behavior; special flags (like -target) are not needed just to continue",
-      "You need to manually edit the state file, removing all 29 already-created resources, before repeating apply",
-      "Terraform doesn't support a partially interrupted apply — after an error the state always becomes unusable for further work"
+      "You need to manually edit the state file, removing all 29 already-created resources, before repeating apply — otherwise Terraform won't be able to correctly continue from the interrupted point and will try to recompute all 50 resources again, leading to duplicated infrastructure in the cloud.",
+      "Terraform doesn't support a partially interrupted apply after rate-limiting errors specifically — after such a failure the state always becomes unusable for further work, and the only reliable path is restoring state from the last backup snapshot taken before this apply started."
     ],
     "correct_index": 1,
     "explanation": "Terraform is designed to be idempotent and resilient to partial apply failures: state correctly records what was already applied up to the point of failure. A regular subsequent terraform apply will recompute the plan based on the current state + configuration and continue exactly with the remaining changes — deliberately rolling back already successfully applied resources or manually editing state in this scenario is not required and unnecessarily increases risk.",
@@ -452,10 +452,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\nprovider \"aws\" {\n  alias  = \"euwest\"\n  region = \"eu-west-1\"\n}\n\nprovider \"aws\" {\n  alias  = \"apeast\"\n  region = \"ap-east-1\"\n}\n\nresource \"aws_instance\" \"web\" {\n  for_each = var.deployments  # { \"eu\" = { provider_key = \"euwest\" }, \"ap\" = { provider_key = \"apeast\" } }\n  provider = each.value.provider_key == \"euwest\" ? aws.euwest : aws.apeast\n  ami      = var.ami_id\n}\n```\nWhy is this code with dynamic provider selection via an expression inside for_each a configuration error?",
     "options": [
-      "for_each cannot be combined with multiple provider aliases at all, this is a fundamental Terraform limitation",
+      "for_each cannot be combined with multiple provider aliases at all, this is a fundamental Terraform limitation — using for_each on a resource block automatically forbids specifying any non-default provider alias other than the unnamed default one, even if it's a static literal.",
       "The provider argument on a resource block must be a literal reference to a specific provider alias, known statically when the configuration is parsed — its value cannot depend on an expression evaluated dynamically (e.g. on each.value or a conditional operator); to choose a provider based on data, you need separate resource blocks (one for each provider alias) with corresponding for_each subsets",
-      "aws.euwest and aws.apeast are simply swapped in this code, so it's a logic error, not a syntax limitation",
-      "There is no error, the code is valid and will work as intended"
+      "aws.euwest and aws.apeast are simply swapped in the logic of the comparison (the ternary returns apeast when the key equals euwest) — this is purely a logic error in the comparison expression itself, not a provider syntax limitation, and the code will compile and run fine, just with the reversed result.",
+      "There is no error, the code is valid and will work as intended — Terraform supports arbitrary expressions in the provider argument starting with version 1.x, the only requirement being that the expression's result type matches a provider reference type, which is satisfied here."
     ],
     "correct_index": 1,
     "explanation": "Terraform requires that provider = <alias> on a resource block be a static literal (aws.euwest), not the result of evaluating an expression — this is a language limitation related to the fact that the provider graph is built before resource values are computed. For multi-region/multi-account deployment via for_each, in practice separate resource blocks are set up for each provider alias, each with its own filtered for_each subset, or separate modules are used with the provider explicitly passed at call time.",
@@ -466,10 +466,10 @@
     "topic": "Terraform",
     "question": "An engineer wants to completely stop managing the aws_s3_bucket.legacy resource via Terraform, but NOT delete the actual bucket in real infrastructure (e.g. the bucket is now managed by another team/tool). They're considering two options: (1) terraform state rm aws_s3_bucket.legacy, (2) a removed { from = aws_s3_bucket.legacy, lifecycle { destroy = false } } block followed by removing the resource block from the code. What's the key difference for team collaboration?",
     "options": [
-      "Both options are completely identical in effect and safety, there's no difference",
+      "Both options are completely identical in effect and safety, there's no difference — in both cases the resource is removed from the current engineer's state immediately without recording this fact anywhere else, so choosing between state rm and a removed block is purely a matter of team style preference.",
       "terraform state rm is a one-off local operation that records nothing in the code itself: if another team member is unaware and doesn't remove the corresponding resource block, their next apply will try to recreate the 'lost' resource; the removed block, by contrast, is recorded in the .tf code itself and versioned via git — on the next apply by ANY team member, Terraform will correctly and reproducibly remove the resource from state without destroying it, with no risk of desync between different engineers' local states",
-      "The removed block physically deletes the resource from the cloud, while state rm only removes it from state",
-      "state rm can only be applied to resources without for_each/count, removed only to those with for_each/count"
+      "The removed block physically deletes the resource from the cloud, while state rm only removes it from state — so option (2) is categorically unsuitable for an engineer who wants to keep the bucket in real infrastructure, and the only correct choice in this scenario is terraform state rm.",
+      "state rm can only be applied to resources without for_each/count, removed only to those with for_each/count — since aws_s3_bucket.legacy in the example is declared without for_each, the only technically possible option is terraform state rm, and the removed block would cause a validation error here."
     ],
     "correct_index": 1,
     "explanation": "terraform state rm is an imperative one-off command whose effect isn't documented in the configuration and doesn't automatically reproduce for other team members. The removed block (Terraform 1.7+) is a declarative, git-versioned way to say 'this resource should no longer be managed by Terraform, but shouldn't actually be deleted' (destroy = false) — on the next apply by any engineer with the updated code, Terraform will safely remove the resource from state on its own, ensuring consistency across everyone working with this configuration.",
@@ -480,10 +480,10 @@
     "topic": "Terraform",
     "question": "In a CI/CD pipeline, a staging step failed on one resource out of 40. To quickly unblock the pipeline, an engineer runs terraform apply -target=aws_instance.broken directly in production, and a day later forgets to run a full terraform apply without -target. What risk materializes in this scenario?",
     "options": [
-      "No risk at all — -target guarantees the rest of the state remains fully in sync with the configuration",
+      "No risk at all — -target guarantees the rest of the state remains fully in sync with the configuration, since Terraform automatically recomputes and applies any untouched changes in the background on the next plan regardless of whether -target was used previously.",
       "The state can end up partially unsynchronized: -target applies changes only to the specified resource and its dependencies, but other changes accumulated in the configuration (unrelated to that resource) are not applied — if they're forgotten (as in this scenario), the real infrastructure and code diverge, and this divergence goes unnoticed until someone runs a regular apply and suddenly sees a large diff",
-      "-target automatically creates a reminder task in HCP Terraform about the need for a full apply",
-      "The problem resolves itself on the next terraform plan without -target — Terraform will automatically apply the missed changes"
+      "-target automatically creates a reminder task in HCP Terraform about the need for a full apply — this task blocks the next pipeline run until someone explicitly confirms running apply without -target, which rules out the risk of forgotten changes in the described scenario.",
+      "The problem resolves itself on the next terraform plan without -target — Terraform automatically applies the missed changes in the background as soon as the divergence is detected, even before the engineer sees the plan output, so the actual risk to production is minimal."
     ],
     "correct_index": 1,
     "explanation": "-target is officially described by HashiCorp as a tool for exceptional situations (troubleshooting), not for regular use, precisely because of this risk: it creates a partial, inconsistent snapshot of state relative to the full configuration. terraform plan without -target won't automatically 'merge' the missed changes into this process — a regular apply will only correctly show them as a diff (which would have happened normally anyway), but until that moment, production can remain indefinitely in a state where part of the desired changes hasn't been applied, without the team knowing.",
@@ -494,10 +494,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\nvariable \"cidr\" {\n  type = string\n}\n\nlocals {\n  octets   = split(\".\", var.cidr)\n  is_valid = can(regex(\"^([0-9]{1,3}\\\\.){3}[0-9]{1,3}/[0-9]{1,2}$\", var.cidr)) && alltrue([for o in local.octets[0] != null ? [tonumber(split(\"/\", local.octets[3])[0])] : [] : true])\n}\n```\nAn engineer reports that this expression fails with a parsing/type error even before being applied to real data. What is the fundamental problem with this code, unrelated to the CIDR-validation logic itself?",
     "options": [
-      "can() cannot be used inside alltrue() — these two functions are mutually incompatible",
+      "can() cannot be used inside alltrue() — these two functions are mutually incompatible, Terraform requires can() to always be the outermost call in a local expression rather than an argument nested inside another function, otherwise the parser raises a 'nested can() not allowed' error.",
       "The for-expression syntax in the assignment to local.is_valid is malformed — the triple conditional `? [...] : [] : true` inside a for-list is not a valid HCL expression (a conditional operator returns exactly one value and cannot contain a second `:` for a separate 'overall' result); the code will not compile regardless of the value of var.cidr",
-      "regex() cannot be used together with split() in the same local block",
-      "The problem is that split(\".\", var.cidr) will return an error if the string contains a '/' character"
+      "regex() cannot be used together with split() in the same local block — both functions compete for the same internal string-parsing buffer in the Terraform runtime, so using them together in adjacent local expressions always results in a 'function conflict' error at plan time.",
+      "The problem is that split(\".\", var.cidr) will return an error if the string contains a '/' character — split() in HCL doesn't support strings containing more than one type of delimiter at once, so CIDR notation like '10.0.0.0/24' is fundamentally incompatible with splitting on a dot."
     ],
     "correct_index": 1,
     "explanation": "This is an HCL syntax error: the ternary operator `condition ? true_val : false_val` returns exactly one value per evaluation; a construct like `... ? [...] : [] : true` is not valid syntax (the extra `: true` has nothing to attach to) and causes a parse error at the terraform validate stage, before any attempt to evaluate real values. This illustrates an important skill: distinguishing an HCL syntax error from a logic/type error inside an otherwise correctly parsed expression.",
@@ -508,10 +508,10 @@
     "topic": "Terraform",
     "question": "Given the templatefile template:\n```\n# init.sh.tpl\n#!/bin/bash\n%{ if enable_monitoring ~}\nsystemctl enable monitoring-agent\n%{ else ~}\necho \"monitoring disabled\"\n%{ endif ~}\n```\nand the call:\n```\nlocals {\n  script = templatefile(\"${path.module}/init.sh.tpl\", {\n    enable_monitoring = var.env == \"prod\"\n  })\n}\n```\nIf the enable_monitoring variable is NOT passed to the template at all (removing this line from the map), what happens during terraform plan?",
     "options": [
-      "templatefile() silently substitutes false as a default for any template variable not explicitly declared in the call",
+      "templatefile() silently substitutes false as a default for any template variable not explicitly declared in the call — this simplifies writing conditional templates, since you don't need to pass every branching variable explicitly if the 'disabled by default' behavior is acceptable.",
       "templatefile() fails with an error: unlike regular Terraform variables (variable), variables INSIDE a templatefile() template have no default — EVERY name used in the template (including inside %{ if ... }) must be explicitly passed in the second argument map, otherwise you get a 'vars map does not contain key' error",
-      "The %{ if ... } directive is simply skipped entirely in this case, including the else branch",
-      "The error only occurs at apply time, not plan, because the file is read lazily"
+      "The %{ if ... } directive is simply skipped entirely in this case, including the else branch — if the condition variable isn't passed, Terraform treats the whole if/else block as absent and removes it from the resulting text without raising an error.",
+      "The error only occurs at apply time, not plan, because the file is read lazily — templatefile() is evaluated lazily and doesn't check for the presence of all variables until the result is actually needed to create or modify a specific resource."
     ],
     "correct_index": 1,
     "explanation": "templatefile(path, vars) requires that EVERY variable mentioned in the template (including those used only inside %{ if }/%{ for } directives) be present in the vars map passed to it — no defaults are provided. The absence of any expected name causes a runtime evaluation error ('vars map does not contain key \"...\"'), not a silent substitution of false/null.",
@@ -522,10 +522,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\nresource \"terraform_data\" \"db_migration\" {\n  input = filemd5(\"${path.module}/migrations/schema.sql\")\n\n  provisioner \"local-exec\" {\n    command = \"psql -f migrations/schema.sql\"\n  }\n\n  lifecycle {\n    replace_triggered_by = [terraform_data.db_migration]\n  }\n}\n```\nWhat is wrong with this code (pay attention to lifecycle.replace_triggered_by)?",
     "options": [
-      "replace_triggered_by only works with resources other than terraform_data — using it with terraform_data itself is forbidden at the provider level",
+      "replace_triggered_by only works with resources other than terraform_data — using it with terraform_data itself is forbidden at the provider level, and referencing it this way triggers an explicit schema validation error at terraform init, rather than a logical problem at apply time.",
       "The code contains a self-reference: replace_triggered_by on terraform_data.db_migration points to... itself (terraform_data.db_migration) — this is a logical error (a potential dependency cycle/pointless construct); the recreate-on-input-change mechanism for terraform_data is already built in by default (a change to input already triggers recreation on its own), so replace_triggered_by here is simply redundant and, more importantly, self-referential",
-      "provisioner \"local-exec\" cannot be used inside terraform_data, only inside null_resource",
-      "filemd5() cannot be used as the input for terraform_data, because input must be a base64-encoded string"
+      "provisioner \"local-exec\" cannot be used inside terraform_data, only inside null_resource — terraform_data doesn't support provisioner blocks at all, since this resource is intended solely for storing arbitrary values between applies, with no side effects.",
+      "filemd5() cannot be used as the input for terraform_data, because input must be a base64-encoded string — passing a regular hex-encoded md5 hash causes a type error at plan time, requiring a prior call to base64encode()."
     ],
     "correct_index": 1,
     "explanation": "The input attribute of terraform_data is itself already tracked as a regular resource attribute — a change in its value (here: a change in the migration file's md5 hash) by itself already causes the resource to be recreated (and, consequently, the provisioner to rerun). Specifying replace_triggered_by = [terraform_data.db_migration] (a reference to itself) is redundant and potentially creates a logically incorrect self-dependency — replace_triggered_by is meant to track changes in OTHER resources/attributes that don't otherwise affect this resource's own diff.",
@@ -536,10 +536,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\ndata \"external\" \"lookup\" {\n  program = [\"python3\", \"${path.module}/lookup.py\"]\n  query = {\n    env = var.environment\n  }\n}\n```\nand lookup.py prints to stdout:\n```\n{\"region\": \"eu-west-1\", \"replicas\": 3}\n```\nWhat happens during terraform plan, and which part of this output violates the external data source's contract?",
     "options": [
-      "Everything works fine, and data.external.lookup.result.replicas is available as the number 3",
+      "Everything works fine, and data.external.lookup.result.replicas is available as the number 3 — the external contract automatically detects the type of each JSON value and coerces the result into the corresponding Terraform type (string, number, bool) without restricting it to a flat string structure.",
       "Terraform fails with a result-parsing error: the external contract requires that ALL values in the returned JSON object be STRINGS (a flat map string→string) — here replicas is passed as a number (3) instead of a string (\"3\"), which violates the expected format",
-      "There is no error, but result.replicas is automatically coerced to the string \"3\" with no user intervention",
-      "The error is caused by the query field — external does not support passing input data to the program"
+      "There is no error, but result.replicas is automatically coerced to the string \"3\" with no user intervention — Terraform post-processes the external program's output on the client side, converting any non-string JSON values to their string representation before storing them in result.",
+      "The error is caused by the query field — external does not support passing input data to the program at all; the only way to parameterize the external script is via TF_VAR_* environment variables, accessible to the program through os.environ."
     ],
     "correct_index": 1,
     "explanation": "The external data source protocol strictly requires that the result the program prints to stdout be a JSON object with exclusively string values (map[string]string), with no nested objects, lists, numbers, or booleans — this is a constraint of the protocol itself, not something Terraform 'auto-converts'. The output {\"region\": \"eu-west-1\", \"replicas\": 3} (a number instead of the string \"3\") violates the contract and causes a result-parsing error on Terraform's side.",
@@ -550,10 +550,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\ndata \"http\" \"internal_config\" {\n  url = \"http://169.254.169.254/latest/meta-data/iam/security-credentials/\"\n}\n```\nAside from the obvious lack of practical usefulness in this specific example, what category of risk generally applies to using the http data source with a dynamically constructed or untrusted URL inside a Terraform configuration executed in CI/CD?",
     "options": [
-      "The http data source is completely safe, because Terraform always executes requests through an isolated sandboxed proxy",
+      "The http data source is completely safe, because Terraform always executes requests through an isolated sandboxed proxy — all network traffic from data \"http\" passes through an intermediate HashiCorp-controlled relay that blocks requests to private address ranges, including 169.254.169.254.",
       "The request executes as the Terraform process (i.e. with the same network visibility and potential access as the CI/CD runner itself) at plan/apply time — if the URL is built from untrusted/user-controlled input, this opens a risk analogous to SSRF (Server-Side Request Forgery): the configuration could be used to send requests to internal endpoints (e.g. a cloud instance metadata service), potentially leaking secrets/credentials via response_body",
-      "The only problem is that data \"http\" doesn't support HTTPS, only HTTP",
-      "There is no risk, because response_body is always automatically masked as sensitive in the plan output"
+      "The only problem is that data \"http\" doesn't support HTTPS, only HTTP — if the scheme in url is changed to https://, the same request to the cloud metadata service becomes fully safe, since transport-layer encryption alone eliminates the SSRF risk in this scenario.",
+      "There is no risk, because response_body is always automatically masked as sensitive in the plan output — Terraform by default marks the result of ANY network-based data source as sensitive, so even a successful credential leak via the metadata endpoint wouldn't appear in plaintext in CI/CD logs."
     ],
     "correct_index": 1,
     "explanation": "Because data \"http\" performs a real network request as the process running terraform plan/apply (i.e. with the network access and permissions of that environment, e.g. a CI runner inside a VPC), an untrusted/dynamic URL creates a classic SSRF vector: the configuration could potentially be manipulated into requesting internal services (including cloud metadata endpoints like 169.254.169.254, which can return temporary credentials). By default, response_body is NOT automatically masked as sensitive unless explicitly marked as such.",
