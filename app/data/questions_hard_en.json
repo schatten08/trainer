@@ -844,10 +844,10 @@
     "topic": "Terraform",
     "question": "Given code where a write-only argument is used alongside a versioning companion attribute:\n```\nresource \"random_password\" \"db\" {\n  length = 20\n}\n\nresource \"aws_db_instance\" \"main\" {\n  # ...\n  password_wo         = random_password.db.result\n  password_wo_version = 1\n}\n```\nWhy do providers using write-only arguments (like password_wo) often introduce a PAIRED regular attribute like password_wo_version?",
     "options": [
-      "password_wo_version determines how many TIMES the provider should retry writing the password on a network error",
+      "password_wo_version determines how many TIMES the provider should retry writing the password on a temporary network error before giving up — this is purely a transport-level retry mechanism, unrelated to whether the secret's own value has actually changed between applies.",
       "Since a write-only value is NEVER saved to state, Terraform has no way to determine from the attribute's own value whether it has changed between applies (a value-based diff is impossible, it's always 'unknown' in state) — the companion version attribute, being a REGULAR (persisted) attribute, serves as an explicit, state-visible trigger: a change to the version number signals to Terraform that the write-only value needs to be resubmitted to the provider on the next apply",
-      "password_wo_version determines the minimum provider version required to support write-only arguments",
-      "A version attribute is mandatory by HCL specification for any attribute with the _wo suffix, regardless of provider logic"
+      "password_wo_version determines the minimum provider plugin version required to support write-only arguments at all — if the installed provider version is lower than specified, apply fails with a compatibility error before ever touching password_wo.",
+      "A companion attribute with the _version suffix is mandatory by HCL specification for any write-only (_wo) argument — Terraform Core statically checks for its presence during provider schema validation, rejecting the configuration without it regardless of the specific provider's logic."
     ],
     "correct_index": 1,
     "explanation": "Since write-only values are not persisted to state, Terraform physically cannot compare an 'old' and 'new' value to detect a change (unlike ordinary attributes). The 'version companion' pattern (a regular, persisted attribute like password_wo_version) solves this: the user explicitly increments version whenever the secret needs updating, and it is precisely the CHANGE to this regular attribute in state that triggers the update/resubmission of the write-only value to the provider.",
@@ -858,10 +858,10 @@
     "topic": "Terraform",
     "question": "Given code combining an ephemeral resource with a regular (persisted) resource:\n```\nephemeral \"random_password\" \"temp\" {\n  length = 16\n}\n\nresource \"aws_db_instance\" \"main\" {\n  # ...\n  password_wo = ephemeral.random_password.temp.result\n}\n```\nWhy is it safe to pass an ephemeral value from random_password.temp into a write-only argument (password_wo), but NOT into a regular (persisted) resource attribute?",
     "options": [
-      "Ephemeral values technically CAN be assigned to any attribute without restriction — the distinction between write-only and regular attributes doesn't matter here",
+      "Ephemeral values technically CAN be assigned to any resource attribute without any restriction at the dependency-graph level — the distinction between write-only and regular (persisted) attributes doesn't matter here, since Terraform Core only checks value type compatibility, not the 'persistence contract'.",
       "A write-only argument, just like an ephemeral value, fundamentally does NOT persist to state — their 'non-persistence contracts' are compatible: on both sides, the value exists only within the current apply. Assigning an ephemeral value to a REGULAR attribute would violate the ephemeral guarantee ('never persist'), since a regular attribute MUST be saved to state — Terraform statically FORBIDS such an assignment as a graph validation error",
-      "This restriction exists purely for historical compatibility reasons and has nothing to do with state",
-      "Ephemeral values can only be assigned to output blocks, not to resource attributes at all, regardless of write-only status"
+      "The restriction on assigning ephemeral values to regular attributes exists purely for historical backward-compatibility reasons with older provider versions and has nothing to do with the state mechanism — this restriction is planned to be fully removed in upcoming Terraform releases.",
+      "Ephemeral values can only be assigned to output blocks marked ephemeral = true, not to resource attributes at all — attempting to pass ephemeral.random_password.temp.result into any resource attribute (including write-only ones) triggers a graph validation error."
     ],
     "correct_index": 1,
     "explanation": "Both write-only arguments and ephemeral resources/values share the same guarantee: the value is not saved to state between runs. Assigning an ephemeral value to a regular (persisted) resource attribute would violate this guarantee, since a regular attribute must be written to state for subsequent diffing — so Terraform statically checks the usage graph and forbids such an assignment as a configuration error. A write-only argument is the only type of attribute 'receiver' whose non-persistence contract is compatible with an ephemeral source.",
@@ -872,10 +872,10 @@
     "topic": "Terraform",
     "question": "An HCP Terraform workspace has 'Auto-apply' enabled together with a VCS-driven workflow, and speculative plans are configured for Pull Requests. A developer opens a PR that changes .tf code. Which of the following CORRECTLY describes the system's behavior?",
     "options": [
-      "The speculative plan for the PR will be automatically applied, since Auto-apply is enabled — simply opening the PR will by itself lead to real infrastructure changes",
+      "The speculative plan for the PR will be automatically applied right after it's created, since Auto-apply is enabled on the workspace — simply opening a PR with changed .tf code leads to real infrastructure changes even before any code review or merge takes place.",
       "A speculative plan run for a PR (before merge, based on the proposed changes) can NEVER be applied by itself, regardless of the Auto-apply setting — it exists solely to preview changes in the context of code review; Auto-apply only takes effect for a 'regular' (non-speculative) run, which is created after the PR is MERGED into a tracked branch (e.g. main)",
-      "Auto-apply and speculative plan are mutually exclusive settings and cannot be enabled at the same time on one workspace",
-      "The speculative plan is only applied automatically if the PR has been approved by at least one reviewer on GitHub/GitLab"
+      "Auto-apply and speculative plan are mutually exclusive settings at the workspace level and cannot physically be enabled at the same time — trying to enable Auto-apply while speculative plans for PRs are already configured results in a workspace configuration error.",
+      "The speculative plan gets applied automatically, bypassing the normal merge process, only if the PR has been explicitly approved by at least one reviewer on GitHub/GitLab — this is a separate, dedicated fast-path specifically built for the review process."
     ],
     "correct_index": 1,
     "explanation": "A speculative plan is a special type of run created for a PR/MR BEFORE it is merged, meant solely for displaying proposed changes directly in the code-review interface (e.g. as a GitHub comment/status check). It is mechanically prevented from ever transitioning to apply, regardless of Auto-apply. The Auto-apply setting only applies to REGULAR runs, created once changes are actually merged into the workspace's tracked branch.",
@@ -886,10 +886,10 @@
     "topic": "Terraform",
     "question": "Given code checking an invariant across several related resources via a check block containing multiple assert blocks:\n```\ncheck \"instance_health\" {\n  assert {\n    condition     = aws_instance.web.instance_state == \"running\"\n    error_message = \"Instance is not running.\"\n  }\n\n  assert {\n    condition     = aws_lb_target_group_attachment.web.target_id == aws_instance.web.id\n    error_message = \"Instance not attached to target group.\"\n  }\n}\n```\nIf the FIRST assert fails and the second passes, how does Terraform handle and display the result of this check block?",
     "options": [
-      "Terraform stops at the first failing assert and does NOT evaluate the second assert at all (short-circuit)",
+      "Terraform stops at the first failing assert inside the check block and does NOT evaluate the remaining assert blocks at all (classic short-circuit, like boolean logic in most programming languages), skipping the second assert entirely.",
       "Terraform evaluates ALL assert blocks inside check independently of one another (without short-circuiting on the first failure) and shows a SEPARATE warning message for each failing assert (here — only for the first one, since the second passed); none of the failures inside check will halt apply/plan itself",
-      "The first assert's failure automatically counts as a failure of the WHOLE check block, WITHOUT an individual message — only one generic warning will be shown, without indicating which specific assert failed",
-      "check blocks with multiple assert blocks are not allowed — only one assert per check is permitted"
+      "The first assert's failure automatically counts as a failure of the WHOLE check block, WITHOUT an individual message per assert — only one generic warning is shown, without indicating which specific assert inside the block actually failed.",
+      "check blocks containing multiple assert blocks within a single check are not supported by Terraform's syntax — only one assert per check is allowed, and separate checks with unique names must be declared for additional invariants."
     ],
     "correct_index": 1,
     "explanation": "A single check block may contain multiple assert blocks, and each is evaluated INDEPENDENTLY (without short-circuiting on the first failure) — Terraform shows a separate warning message for each failing assert, with its own error_message. This allows a single plan/apply run to surface ALL violated invariants at once, rather than only the first one. As with any check, a failing assert inside it does not halt apply — it's purely a diagnostic signal.",
@@ -900,10 +900,10 @@
     "topic": "Terraform",
     "question": "An HCP Terraform workspace has Drift Detection enabled (a periodic background check that the state matches real infrastructure, independent of normal runs). Drift is detected: a security group rule was manually changed in the AWS console. Which of the following correctly describes the system's default reaction?",
     "options": [
-      "Drift Detection automatically triggers an apply to restore the infrastructure to the state described in the .tf code, without user involvement",
+      "Drift Detection automatically triggers a full apply immediately after detecting a discrepancy, in order to forcibly restore the infrastructure to the state described in the current .tf code — without any confirmation or engineer involvement in this process.",
       "Drift Detection periodically runs a refresh-only-like plan in the background and, upon detecting a discrepancy, ONLY notifies (a drift UI indicator on the workspace, optionally integrated with notification channels) but does NOT initiate an apply itself — the decision of whether to bring the infrastructure back in line with the code (a regular apply) or update the code to reflect the real infrastructure remains with the engineer",
-      "Drift Detection automatically deletes and recreates the resource in which drift was detected",
-      "Drift Detection only works for resources marked with lifecycle { prevent_destroy = true }"
+      "Drift Detection automatically flags the specific resource where drift was detected for deletion and recreation (destroy+create) on the next scheduled run, bypassing the usual plan-review process by the engineer.",
+      "Drift Detection only works for resources explicitly marked with lifecycle { prevent_destroy = true } — for all other resources lacking this attribute, the background check against real infrastructure is not performed at all."
     ],
     "correct_index": 1,
     "explanation": "Drift Detection in HCP Terraform periodically runs a background refresh-only-like plan for the workspace, and upon detecting a discrepancy between state and reality, surfaces it as a drift indicator in the UI (and may notify via configured integrations) — but does NOT take any automatic corrective action (apply). The engineer decides whether to run a regular apply to restore the infrastructure to the state described in the code, or to update the code to reflect an intentional manual change.",
@@ -914,10 +914,10 @@
     "topic": "Terraform",
     "question": "Given a module combining lifecycle.precondition with a check across several independent input variables (not directly tied to the resource itself):\n```\nresource \"aws_autoscaling_group\" \"app\" {\n  min_size = var.min_size\n  max_size = var.max_size\n  # ...\n\n  lifecycle {\n    precondition {\n      condition     = var.min_size <= var.max_size\n      error_message = \"min_size must not exceed max_size.\"\n    }\n  }\n}\n```\nWhy does it make more sense to place this check in lifecycle.precondition on the resource, rather than in separate variable validation blocks for min_size and max_size?",
     "options": [
-      "variable validation fundamentally doesn't support numeric comparisons — only string comparisons",
+      "variable validation fundamentally doesn't support numeric comparisons (such as <=, >=) at all — the condition block can only work with string values and functions like contains()/regex(), so a numeric check like min_size <= max_size simply cannot be expressed there.",
       "variable validation is scoped to a SINGLE variable and cannot reference the value of ANOTHER variable in its condition, whereas lifecycle.precondition, being at the resource-block level, has access to multiple variables/expressions simultaneously — which is necessary to check invariants that depend on a RELATIONSHIP between several values (min_size <= max_size), rather than on each value individually",
-      "lifecycle.precondition executes faster than variable validation for purely technical performance reasons",
-      "Both constructs are fully equivalent in this case — the choice is arbitrary, with no functional difference"
+      "lifecycle.precondition executes noticeably faster than variable validation for purely technical performance reasons within the Terraform engine — since the condition is evaluated during resource graph construction rather than during variable parsing.",
+      "Both constructs are fully equivalent in this specific case and produce an identical result for any input values — the choice between them is arbitrary, determined only by the code author's personal style, with no functional difference whatsoever."
     ],
     "correct_index": 1,
     "explanation": "A validation block inside variable is historically scoped to reference ONLY that variable itself (var.min_size) and cannot directly reference var.max_size in its condition (the check is confined to a single variable's context). lifecycle.precondition, being declared at the resource, module, or output block level, has access to arbitrary configuration expressions, including several different variables at once — making it the appropriate place to check invariants that depend on a relationship between multiple values.",
@@ -928,10 +928,10 @@
     "topic": "Terraform",
     "question": "Given a terraform test snippet checking several scenarios via separate run blocks with variable overrides, but sharing a common provider configuration via a top-level provider block:\n```\nprovider \"aws\" {\n  region = \"eu-west-1\"\n}\n\nrun \"test_small\" {\n  command = plan\n  variables { size = \"small\" }\n}\n\nrun \"test_large\" {\n  command = plan\n  variables { size = \"large\" }\n}\n```\nIf BOTH runs use command = plan (no apply), is there any need for explicit state 'cleanup' between them, so that test_large isn't accidentally affected by test_small's results?",
     "options": [
-      "Yes, a run with command = destroy MUST be inserted between the run blocks, otherwise both runs would share the same state",
+      "Yes, a run with command = destroy MUST be inserted between plan-only run blocks — otherwise both runs would implicitly share the same underlying state instance, and test_small's variables would 'leak' into test_large.",
       "No — by default, each run block in terraform test executes with its OWN isolated state instance (unless it deliberately reuses a module across runs for multi-step scenarios, as in the run.setup.output pattern) — so variable overrides in one run do NOT affect another run in the same test file, and explicit cleanup between independent command=plan runs is not required",
-      "Isolation between runs is only possible using SEPARATE .tftest.hcl files — within one file, all runs necessarily share a common state",
-      "A top-level provider block is forbidden in terraform test — each run must declare its own provider"
+      "Isolation between run blocks is only achievable by using SEPARATE .tftest.hcl files in the project — within a single file, all declared runs necessarily share a common state instance, regardless of their command or variables.",
+      "A provider block declared at the top level of a .tftest.hcl file is forbidden by terraform test's syntax — each run block must declare its own isolated provider block internally, otherwise plan fails with a configuration error."
     ],
     "correct_index": 1,
     "explanation": "Each run block in a .tftest.hcl file by default operates with its own independent 'virtual' state instance — variables set in one run don't automatically carry over to another run (aside from the explicit cross-step reference pattern run.<name>.<output>, which deliberately links specific runs together). Therefore test_small and test_large in this example are fully isolated from each other with no need for explicit cleanup between them.",
@@ -942,10 +942,10 @@
     "topic": "Terraform",
     "question": "An organization on HCP Terraform has set up a workspace structure using Workspace Tags with a dynamic tag filter in a Team Access policy (e.g. the 'network-team' has write access only to workspaces tagged 'network'). An engineer creates a new workspace and forgets to assign the 'network' tag to it, even though it actually manages network infrastructure. Which of the following correctly describes the consequences?",
     "options": [
-      "HCP Terraform will automatically detect that the workspace belongs to 'network' based on the content of the .tf code (the presence of aws_vpc/aws_subnet resources) and assign the tag without user involvement",
+      "HCP Terraform automatically analyzes the content of the workspace's .tf code (presence of aws_vpc/aws_subnet and other networking resources) and heuristically determines its 'network' category based on that, assigning the corresponding tag without any user involvement.",
       "Tag-based Team Access is entirely static and does NOT react dynamically to workspace content — the 'network-team' team's access to this specific workspace is determined ONLY by the actual set of tags assigned to it at the time of the permission check; without the 'network' tag, network-team will not get the access configured for that tag, regardless of the workspace's real purpose",
-      "The absence of a tag makes the workspace accessible to ALL teams in the organization by default (fail-open)",
-      "Tag-based Team Access only applies to the initial creation of the workspace, not to subsequent runs/applies on it"
+      "The absence of a tag on a workspace makes it accessible to ALL teams in the organization by default (fail-open behavior) — HCP Terraform treats untagged workspaces as 'shared', not restricting access to them via any team policy.",
+      "Tag-based Team Access only applies at the moment the workspace is initially created (a provisioning-time check) — it does not extend to subsequent runs/applies on the already-created workspace, which are governed by a separate access mechanism."
     ],
     "correct_index": 1,
     "explanation": "Team Access configured via workspace tag bindings is evaluated purely based on the ACTUALLY ASSIGNED tags — it's not some 'smart' heuristic based on code content, but a direct policy↔tag mapping. If an engineer forgets to assign the needed tag, the corresponding team won't get the access configured for that tag, regardless of the workspace's real purpose — this is a common practical mistake when scaling access control via tags, requiring process discipline (e.g. mandatory tagging in the workspace-creation template).",
@@ -956,10 +956,10 @@
     "topic": "Terraform",
     "question": "Given code combining optional() with a nested object type, where the optional attribute is itself a complex object with its own validation-like behavior via defaults:\n```\nvariable \"cluster_config\" {\n  type = object({\n    name = string\n    autoscaling = optional(object({\n      min_nodes = optional(number, 1)\n      max_nodes = optional(number, 3)\n    }), {})\n  })\n}\n```\nIf the calling code passes `cluster_config = { name = \"prod\" }`, without specifying autoscaling at all, what will the resulting value of var.cluster_config.autoscaling.min_nodes be?",
     "options": [
-      "null, because the outer optional() for autoscaling substitutes the default {} literally, without applying the INNER optional() values for min_nodes/max_nodes",
+      "null, because the outer optional() for autoscaling substitutes the default {} literally and stops right there, without further applying the INNER optional() values for min_nodes/max_nodes — recursive 'filling in' of nested objects isn't implemented in Terraform.",
       "1 — Terraform applies defaults RECURSIVELY: first, the outer optional(object({...}), {}) substitutes an empty object {} as the default for the missing autoscaling, after which Terraform 'fills in' that object according to the INNER optional() definitions of its own attributes (min_nodes gets its own default of 1, max_nodes gets 3), so the resulting value is equivalent to { min_nodes = 1, max_nodes = 3 }",
-      "The code fails with a type validation error, because nested optional() inside optional() is not supported",
-      "3, because with recursive default application, ONLY the last optional() in order within the type definition is used"
+      "The code fails with a type validation error already at terraform validate time, because nesting optional() inside another optional() for object types is not syntactically supported — only a single level of optional() is allowed within a variable's type definition.",
+      "3, because when recursively applying defaults for nested optional types, ONLY the last optional() attribute in the type definition's order gets applied, while earlier ones (min_nodes) remain uninitialized and resolve to null."
     ],
     "correct_index": 1,
     "explanation": "Starting with support for 'defaults propagation' for nested optional types (Terraform 1.3+, with further improvements in subsequent releases), Terraform applies default values RECURSIVELY: the outer default ({}) for autoscaling is combined with the default values of its own inner optional attributes, so the resulting object ends up with min_nodes=1 and max_nodes=3, rather than just an empty {} with no further processing.",
@@ -971,9 +971,9 @@
     "question": "On the HCP Terraform Business tier, a Policy Set has been configured applying OPA (Open Policy Agent) policies instead of Sentinel, with a policy that forbids public S3 buckets (checked via data.aws_s3_bucket_public_access_block in a rego file). What is the key difference in how HCP Terraform supports OPA compared to Sentinel as a policy-as-code engine?",
     "options": [
       "OPA policies are written in the rego language (rather than a Sentinel-specific language) and are evaluated through the same general policy set/enforcement level mechanism (advisory/mandatory) as Sentinel — HCP Terraform supports BOTH engines as alternative policy-as-code options, letting organizations choose the tool they're already familiar with, rather than requiring them to use only Sentinel",
-      "OPA has completely replaced Sentinel, and Sentinel policies are no longer supported by HCP Terraform in any tier",
-      "OPA policies can only run at the pre-plan stage, whereas Sentinel can only run at the post-plan stage, making them mutually exclusive in purpose",
-      "OPA has no access to plan data (tfplan) at all, and can only check static configuration code before values are computed"
+      "OPA has completely replaced Sentinel as the policy-as-code engine across all HCP Terraform tiers — Sentinel policies are no longer supported and cannot be executed on any currently existing workspace.",
+      "OPA policies can only be applied at the pre-plan stage of a configuration (before resource values are computed), whereas Sentinel runs exclusively at the post-plan stage (after tfplan is computed) — making them mutually exclusive in purpose and applicable scope.",
+      "OPA has no access to the final plan data (tfplan) at all and can only check static HCL configuration code before actual resource values are computed — unlike Sentinel, which operates specifically on the finished planned state."
     ],
     "correct_index": 0,
     "explanation": "HCP Terraform supports both Sentinel and OPA (rego) as alternative policy-as-code engines within policy sets — both integrate into the same overall run lifecycle with the same set of enforcement levels (advisory/mandatory for OPA corresponds to the soft/hard-mandatory logic). This gives organizations that already have expertise/existing policies in rego (e.g. from Kubernetes/OPA Gatekeeper practice) the ability to reuse them for Terraform policies, without having to rewrite everything in Sentinel.",
@@ -985,9 +985,9 @@
     "question": "A team manages AWS infrastructure with Terraform, and now needs to add a similar stack in Azure for disaster recovery. What exactly is the \"service-agnostic\"/multi-cloud nature of Terraform in this scenario — what transfers between clouds, and what must necessarily be written from scratch?",
     "options": [
       "The workflow transfers (init/plan/apply/destroy, the state model, HCL syntax, working with variables/outputs/modules) along with the team's overall process — but the actual resource blocks for azurerm_* must be written from scratch, since each provider describes its own set of resources matching that specific cloud's API",
-      "Terraform automatically translates aws_instance into azurerm_virtual_machine without any code changes, because both providers implement one common shared resource interface",
-      "Nothing transfers — each cloud requires a completely separate tool, and Terraform provides no common abstraction layer between clouds at all",
-      "Only the terraform.tfstate file itself transfers — it is universal across any provider and contains no cloud-specific data"
+      "Terraform automatically translates aws_instance resource blocks into equivalent azurerm_virtual_machine blocks without any changes to the user's code, because both providers implement a single shared resource interface at the schema level.",
+      "There is effectively nothing to transfer between clouds — each provider requires a completely separate infrastructure management tool, and Terraform provides no common abstraction layer or reusable workflow across different clouds whatsoever.",
+      "Only the terraform.tfstate file itself transfers wholesale — it is fully universal across any provider and contains no cloud-specific resource data at all, so it can be directly reused as-is with azurerm."
     ],
     "correct_index": 0,
     "explanation": "Terraform's multi-cloud/service-agnostic nature does not mean automatic translation of resources between clouds — there is no single shared resource set spanning all providers. What stays consistent is the workflow and language layer: the same sequence of commands (init -> plan -> apply -> destroy), the same state model, the same HCL syntax, and the same mechanisms for variables/outputs/modules/expressions work regardless of which provider is in use. The actual resource blocks are specific to each cloud's API (aws_instance vs azurerm_virtual_machine) and are not carried over automatically — an engineer must rewrite them for the new provider. Terraform gives you one unified process and language, but it does not abstract away the differences between the underlying cloud APIs themselves.",
@@ -998,10 +998,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\nprovider \"aws\" {\n  region = \"us-east-1\"\n}\n\nprovider \"azurerm\" {\n  features {}\n}\n\nresource \"aws_s3_bucket\" \"logs\" {\n  bucket = \"central-logs\"\n}\n\nresource \"azurerm_storage_account\" \"logs_mirror\" {\n  name = \"logsmirror\"\n  # ... references aws_s3_bucket.logs.bucket via a local value\n}\n```\nA single `terraform apply` creates resources in two different clouds through two different providers. What does this imply about Terraform's architecture that explains its hybrid/multi-cloud usage?",
     "options": [
-      "This is impossible — a single state file cannot contain resources from different providers at the same time",
+      "This is technically impossible within a single project — one state file physically cannot contain resources from different providers at the same time, so the code example above would fail already at terraform plan.",
       "Terraform Core has no knowledge of any specific cloud's details — it builds a single unified resource graph and manages resource lifecycle through a standardized protocol, while all AWS/Azure API specifics are encapsulated inside separate provider plugins; that's why a single apply/state can combine resources from an arbitrary set of providers within one graph",
-      "azurerm_storage_account.logs_mirror automatically syncs with aws_s3_bucket.logs at the API level without Terraform's involvement, simply because both resources are declared in the same .tf file",
-      "This only works in HCP Terraform (Terraform Cloud) — the open-source Terraform CLI does not support this"
+      "azurerm_storage_account.logs_mirror automatically synchronizes with aws_s3_bucket.logs directly at the cloud API level, without any involvement from Terraform Core, purely because both resources happen to be declared in the same .tf file of the project.",
+      "Combining providers within a single apply like this only works on the managed HCP Terraform platform (formerly Terraform Cloud) — in the self-hosted open-source Terraform CLI, this capability is architecturally not supported at all."
     ],
     "correct_index": 1,
     "explanation": "Terraform's architecture separates Core (dependency graph, state, the plan/apply engine, HCL) from providers (plugins that know a specific cloud/service's API). Core communicates with any provider through a single gRPC-based protocol, without knowing AWS or Azure details directly. That's exactly why a single resource graph and a single state can contain resources from an arbitrary set of providers at once — this isn't a feature of a particular backend or of HCP Terraform specifically, but a fundamental property of Terraform Core itself, available in any distribution including the open-source CLI.",
@@ -1012,10 +1012,10 @@
     "topic": "Terraform",
     "question": "Given the code:\n```\n# root module\nvariable \"env\" {\n  default = \"prod\"\n}\n\nmodule \"network\" {\n  source = \"./modules/network\"\n  # env is NOT passed into the module block\n}\n```\n```\n# modules/network/main.tf\nresource \"aws_vpc\" \"main\" {\n  tags = { Environment = var.env }  # env is declared separately inside this module\n}\n```\nA variable named `env` is also declared inside `modules/network`. Given module variable scope isolation, what happens on `terraform plan`?",
     "options": [
-      "var.env inside modules/network automatically inherits the value of var.env from the root module, since the names match and Terraform searches for name matches across the whole project",
+      "var.env inside modules/network automatically inherits the value of var.env from the root module simply because the names match — by design, Terraform searches for variable name matches across the entire module tree of the project.",
       "var.env inside modules/network is a completely separate variable in its own scope; it has no connection whatsoever to var.env in the root module just because the names match, and it will only get its value from its own default (if declared) or via an explicit env = ... argument inside the module \"network\" { ... } block",
-      "Terraform will raise a naming-conflict error, since the same variable name var.env cannot be used across two different .tf files in the same project at once",
-      "The value will be picked up from the root module's terraform.tfvars, since .tfvars files are global across all modules in a project"
+      "Terraform raises a variable name conflict error already at terraform validate time, because the same name var.env cannot physically be used in two different .tf files of the same project simultaneously, even across different modules.",
+      "The value gets automatically picked up from terraform.tfvars defined in the root module, since .tfvars files in Terraform are global across all modules in a project and apply recursively down the call tree."
     ],
     "correct_index": 1,
     "explanation": "Every module (including the root module) has its own, fully isolated variable scope. A matching variable name between modules is pure coincidence — it creates no link between the values: var.env in root and var.env in modules/network are two independent objects. The only way to pass a value from a parent into a child module is to explicitly set the corresponding argument inside the module \"...\" { variable_name = value } block. Without that, the child module will fall back to its own default (if one is declared), or if no default exists, plan will fail with a 'no value for required variable' error. .tfvars files are also not global across all modules — they apply only at the level of the module for which terraform plan/apply is being run (typically the root module).",
